@@ -12,12 +12,17 @@ import pytest
 from pewpew.cli import main
 
 
-class _FakeRavenApp:
+class _FakeAppContainer:
     def __init__(self) -> None:
         self.added_widgets: list[tuple[object, int, int]] = []
 
-    def add_widget(self, widget: object, x: int, y: int) -> None:
+    def add(self, widget: object, x: int, y: int) -> None:
         self.added_widgets.append((widget, x, y))
+
+
+class _FakeRavenApp:
+    def __init__(self) -> None:
+        self.app = _FakeAppContainer()
 
 
 class _FakeRunApp:
@@ -30,30 +35,23 @@ class _FakeRunApp:
 
 def test_importing_wrapper_does_not_import_raven(monkeypatch: pytest.MonkeyPatch) -> None:
     """Catches an accidental module-level dependency on Raven Framework."""
-    monkeypatch.delitem(sys.modules, "core", raising=False)
-    monkeypatch.delitem(sys.modules, "core.raven_app", raising=False)
-    monkeypatch.delitem(sys.modules, "core.run_app", raising=False)
+    monkeypatch.delitem(sys.modules, "raven_framework", raising=False)
 
     import pewpew.raven_app as raven_app
 
     importlib.reload(raven_app)
 
-    assert "core.raven_app" not in sys.modules
-    assert "core.run_app" not in sys.modules
+    assert "raven_framework" not in sys.modules
 
 
 def test_raven_wrapper_adds_exactly_one_host_at_origin(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Catches a Raven app with extra widgets, wrong coordinates, or credentials."""
-    core = ModuleType("core")
-    raven_module = ModuleType("core.raven_app")
-    run_module = ModuleType("core.run_app")
-    raven_module.RavenApp = _FakeRavenApp
-    run_module.RunApp = _FakeRunApp
-    monkeypatch.setitem(sys.modules, "core", core)
-    monkeypatch.setitem(sys.modules, "core.raven_app", raven_module)
-    monkeypatch.setitem(sys.modules, "core.run_app", run_module)
+    raven_framework = ModuleType("raven_framework")
+    raven_framework.RavenApp = _FakeRavenApp
+    raven_framework.RunApp = _FakeRunApp
+    monkeypatch.setitem(sys.modules, "raven_framework", raven_framework)
 
     import pewpew.raven_app as raven_app
 
@@ -69,7 +67,7 @@ def test_raven_wrapper_adds_exactly_one_host_at_origin(
 
     app, app_id, app_key = _FakeRunApp.calls[0]
     assert (app_id, app_key) == ("", "")
-    assert app.added_widgets == [(app.host_widget, 0, 0)]
+    assert app.app.added_widgets == [(app.host_widget, 0, 0)]
     assert isinstance(app.host_widget, Host)
     assert app.host_widget.config is config
 

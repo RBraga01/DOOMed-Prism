@@ -10,8 +10,7 @@ from pewpew.host_widget import DoomHostWidget
 
 def _raven_types() -> tuple[type[Any], Any]:
     """Load the separately installed Raven API only when desktop launch is requested."""
-    from core.raven_app import RavenApp
-    from core.run_app import RunApp
+    from raven_framework import RavenApp, RunApp
 
     return RavenApp, RunApp
 
@@ -26,7 +25,7 @@ def _doomed_prism_app_type() -> type[Any]:
         def __init__(self, config: RuntimeConfig) -> None:
             super().__init__()
             self.host_widget = DoomHostWidget(config)
-            self.add_widget(self.host_widget, 0, 0)
+            self.app.add(self.host_widget, 0, 0)
 
     return DoomedPrismApp
 
