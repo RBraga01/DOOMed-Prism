@@ -102,7 +102,10 @@ def test_run_skips_git_apply_when_marker_present(tmp_path: Path) -> None:
 
     joined = [" ".join(c) for c in calls]
     assert not any("clone" in c for c in joined)
-    assert not any("apply" in c and "--check" not in c for c in joined)
+    assert not any(
+        cmd[:4] == ["git", "-C", str(build_dir), "apply"] and "--check" not in cmd
+        for cmd in calls
+    )
 
 
 def _ok():
