@@ -177,6 +177,33 @@ def test_cleanup_closes_reader_before_stopping_engine(qtbot) -> None:
     assert order == ["reader", "engine"]
 
 
+def test_cleanup_retries_each_transiently_failed_operation(qtbot) -> None:
+    """Catches cleanup marking a failed reader-close or engine-stop as complete."""
+    engine = _Engine()
+    reader = _Reader()
+
+    close_calls: list[int] = []
+
+    def failing_close() -> None:
+        close_calls.append(len(close_calls) + 1)
+        if len(close_calls) == 1:
+            raise OSError("temporary reader-close failure")
+        reader.is_open = False
+
+    reader.close = failing_close  # type: ignore[assignment]
+    host = _host(qtbot, engine=engine, reader=reader)
+
+    with pytest.raises(OSError, match="temporary reader-close failure"):
+        host.cleanup()
+    # engine.stop() must still have been attempted even though reader.close() raised first
+    assert engine.stop_calls == 1
+    assert close_calls == [1]
+
+    host.cleanup()  # retry: reader.close() succeeds this time; engine already stopped, not retried
+    assert close_calls == [1, 2]
+    assert engine.stop_calls == 1
+
+
 def test_about_to_quit_and_close_event_both_run_cleanup(qtbot) -> None:
     engine = _Engine()
     host = _host(qtbot, engine=engine)
