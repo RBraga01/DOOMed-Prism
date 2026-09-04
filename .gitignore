@@ -1,0 +1,14 @@
+.worktrees/
+*.wad
+*.pk3
+*.exe
+*.dll
+*.so
+.env
+app_key
+raven_framework/
+.venv/
+__pycache__/
+.pytest_cache/
+local.toml
+artifacts/
