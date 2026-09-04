@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import os
+import secrets
 import subprocess
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Protocol
 
 from pewpew.config import RuntimeConfig
@@ -26,8 +28,12 @@ class _Process(Protocol):
     def kill(self) -> None: ...
 
 
-PopenFactory = Callable[[list[str]], _Process]
+PopenFactory = Callable[[list[str], Mapping[str, str]], _Process]
 GracefulClose = Callable[[int], None]
+
+
+def _spawn(args: list[str], env: Mapping[str, str]) -> _Process:
+    return subprocess.Popen(args, env=env)
 
 
 class DoomProcess:
@@ -36,7 +42,7 @@ class DoomProcess:
     def __init__(
         self,
         config: RuntimeConfig,
-        popen_factory: PopenFactory = subprocess.Popen,
+        popen_factory: PopenFactory = _spawn,
         graceful_close: GracefulClose | None = None,
     ) -> None:
         self._config = config
@@ -45,6 +51,7 @@ class DoomProcess:
             graceful_close if graceful_close is not None else _windows_graceful_close
         )
         self._process: _Process | None = None
+        self._frame_segment_name: str | None = None
 
     def __enter__(self) -> DoomProcess:
         return self
@@ -56,7 +63,10 @@ class DoomProcess:
         """Launch the configured Crispy Doom executable and return its PID."""
         if self.poll() is None and self._process is not None:
             raise EngineAlreadyRunning("Crispy Doom is already running")
-        self._process = self._popen_factory(self._command())
+        name = f"doomed-prism-fb-{os.getpid()}-{secrets.token_hex(4)}"
+        child_env = {**os.environ, "DOOMED_PRISM_FB_NAME": name}
+        self._process = self._popen_factory(self._command(), child_env)
+        self._frame_segment_name = name
         return self._process.pid
 
     def poll(self) -> int | None:
@@ -65,6 +75,10 @@ class DoomProcess:
             return None
         return self._process.poll()
 
+    @property
+    def frame_segment_name(self) -> str | None:
+        return self._frame_segment_name
+
     def stop(self, timeout_s: float = 3.0) -> None:
         """Stop the live child gracefully, escalating only after a timeout."""
         process = self._process
@@ -72,14 +86,12 @@ class DoomProcess:
             return
         if process.poll() is not None:
             self._process = None
+            self._release_segment()
             return
 
         try:
-            # Request that the process close its own windows before escalating.
-            # A normal Qt/Raven shutdown must not start by forcefully killing SDL.
             self._graceful_close(process.pid)
         except Exception:
-            # A native close-request failure must not strand the supervised child.
             pass
         else:
             try:
@@ -88,16 +100,16 @@ class DoomProcess:
                 pass
             else:
                 self._process = None
+                self._release_segment()
                 return
 
         process.terminate()
         try:
-            # Keep this wait bounded too.  If it times out, retain the handle
-            # so a later cleanup call can retry instead of losing an orphan.
             process.wait(timeout=timeout_s)
         except subprocess.TimeoutExpired:
             raise
         self._process = None
+        self._release_segment()
 
     def _command(self) -> list[str]:
         return [
@@ -111,12 +123,22 @@ class DoomProcess:
             str(self._config.viewport_height),
         ]
 
+    def _release_segment(self) -> None:
+        name = self._frame_segment_name
+        self._frame_segment_name = None
+        if not name or sys.platform == "win32":
+            return
+        try:
+            os.unlink(f"/dev/shm/{name}")
+        except OSError:
+            pass
+
 
 def _windows_graceful_close(pid: int) -> None:
     """Request cooperative native closure on Windows and remain a no-op elsewhere."""
     if sys.platform != "win32":
         return
     # Keep ctypes isolated in the adapter and import it only for desktop use.
-    from pewpew.windows import request_close_windows
+    from pewpew.win_close import request_close_windows
 
     request_close_windows(pid)
