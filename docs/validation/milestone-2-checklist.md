@@ -147,19 +147,21 @@ For each row in the result document, record all of the following as `yes`, `no`,
 After every available mode and the cleanup check are complete, edit the sole
 final decision field in the result document:
 
-- **PASS — framebuffer integration viable** only when Raw and every available optical
-  mode (Night, Day, Outdoors, and Camera) have two changed app captures or a
-  short video proving live DOOM pixels, frame updates, correct viewport geometry,
-  and inclusion in Raven's app capture; dark areas read as transparent in optical
-  modes; a keyboard press in Crispy's SDL window produces a visible state change
-  in the Qt viewport; the cleanup check passes with no orphan and no exception;
-  and matching display scaling is confirmed.
-- **FAIL — framebuffer path insufficient** only when the shared-memory export
-  is confirmed live (segment counter advancing) but the Qt viewport is still not
-  captured in an available optical mode, or additive compositing is wrong (for
-  example, dark areas render opaque instead of transparent). Only this outcome
-  selects a shared OpenGL ES / Qt rendering surface design. Do not use screen
-  capture or desktop capture as a workaround.
+- **PASS — framebuffer integration viable:** Raw and every available optical mode
+  (Night, Day, Outdoors, and Camera) have two changed app captures or a short
+  video proving live, updating DOOM pixels in the Qt viewport and Raven's app
+  capture; viewport geometry is 640×480; margins and home control are uncovered;
+  dark areas read as transparent in optical modes (additive display); a keypress
+  in Crispy's SDL window produces a visible state change in the viewport; the
+  lifecycle is a clean single PID with no orphan; and `cleanup()` runs with no
+  exception.
+- **FAIL — framebuffer path insufficient:** The shared-memory export is
+  confirmed live (segment counter advancing), but the Qt viewport is still not
+  captured in an available optical mode, or additive compositing is wrong
+  (for example, dark areas render opaque instead of transparent). This opens a
+  design task for approach B, a shared OpenGL ES / Qt rendering surface, or an
+  in-process rendering path. Do not use screen or desktop capture as a
+  workaround.
 - **BLOCKED/RETRY — implementation or environment failure** when build, launch,
   geometry, display scaling, segment creation, keyboard input, orphan cleanup,
   teardown exception, or required evidence fails. Record the failure, fix or
@@ -183,7 +185,7 @@ git diff --cached --name-status
 git diff --cached --check
 python scripts/check_publication_safety.py --root .
 python scripts/check_publication_safety.py --root . --history
-git commit -m "docs: add Milestone 2 framebuffer capture checklist"
+git commit -m "docs: record framebuffer integration result"
 git status --short
 ```
 
