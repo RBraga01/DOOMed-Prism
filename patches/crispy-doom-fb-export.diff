@@ -47,10 +47,10 @@ index 8b7fb8f6..eea331ee 100644
      add_executable("${PROGRAM_PREFIX}doom" WIN32 ${SOURCE_FILES_WITH_DEH} "${CMAKE_CURRENT_BINARY_DIR}/doom-res.rc")
 diff --git a/src/i_framebuffer_export.c b/src/i_framebuffer_export.c
 new file mode 100644
-index 00000000..ad35674a
+index 00000000..f9356f55
 --- /dev/null
 +++ b/src/i_framebuffer_export.c
-@@ -0,0 +1,160 @@
+@@ -0,0 +1,165 @@
 +//
 +// Copyright(C) 2026 DOOMed Prism contributors
 +//
@@ -140,6 +140,7 @@ index 00000000..ad35674a
 +    if (fb_handle == NULL) { fb_enabled = 0; return; }
 +    fb_base = (unsigned char *) MapViewOfFile(fb_handle, FILE_MAP_ALL_ACCESS,
 +                                              0, 0, FB_SEGMENT_SIZE);
++    if (fb_base == NULL) { fb_enabled = 0; return; }
 +#else
 +    shm_unlink(fb_name);
 +    fb_fd = shm_open(fb_name, O_CREAT | O_RDWR, 0600);
@@ -147,8 +148,12 @@ index 00000000..ad35674a
 +    if (ftruncate(fb_fd, FB_SEGMENT_SIZE) != 0) { close(fb_fd); fb_enabled = 0; return; }
 +    fb_base = mmap(NULL, FB_SEGMENT_SIZE, PROT_READ | PROT_WRITE,
 +                   MAP_SHARED, fb_fd, 0);
++    /* POSIX mmap() signals failure with MAP_FAILED ((void *) -1), never
++     * NULL -- a shared NULL-only check here would let a failed mapping
++     * through and the memset() below would write through an invalid
++     * pointer. */
++    if (fb_base == MAP_FAILED) { close(fb_fd); fb_base = NULL; fb_enabled = 0; return; }
 +#endif
-+    if (fb_base == NULL) { fb_enabled = 0; return; }
 +    memset(fb_base, 0, FB_HEADER_SIZE);
 +    fb_active = 0; fb_counter = 0;
 +    fb_write_header(0);
