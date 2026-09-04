@@ -1,0 +1,8 @@
+
+[dev]
+pytest<9,>=8
+pytest-qt<5,>=4.4
+PySide6<7,>=6.7
+
+[raven]
+PySide6<7,>=6.7

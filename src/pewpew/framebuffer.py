@@ -29,7 +29,12 @@ class FrameSegmentError(RuntimeError):
 
 @dataclass(frozen=True)
 class Frame:
-    """One decoded frame view. ``buffer`` is valid until the next reader call."""
+    """One decoded frame view. ``buffer`` is valid until the next reader call.
+
+    Holding a Frame past the next reader call (or close()) keeps the segment
+    mapping alive until the Frame is garbage collected; release the frame
+    to allow the mapping to close immediately.
+    """
 
     width: int
     height: int
@@ -97,7 +102,9 @@ class FrameReader:
             try:
                 self._map.close()
             except BufferError:
-                # There are still exported memoryviews; let the GC handle cleanup
+                # A retained Frame.buffer memoryview pins the mmap; the OS mapping
+                # is released when the caller drops that Frame (GC). This is expected,
+                # not an error to surface.
                 pass
             self._map = None
         if self._fd != -1:
@@ -117,4 +124,11 @@ class FrameReader:
                 raise FileNotFoundError(self._name) from error
         path = f"/dev/shm/{self._name}"
         self._fd = os.open(path, os.O_RDONLY)
-        return mmap.mmap(self._fd, SEGMENT_SIZE, prot=mmap.PROT_READ)
+        try:
+            return mmap.mmap(self._fd, SEGMENT_SIZE, prot=mmap.PROT_READ)
+        except (ValueError, OSError) as error:
+            # File exists but is not yet truncated to SEGMENT_SIZE (producer
+            # has not finished initialization), or other OS-level issue.
+            os.close(self._fd)
+            self._fd = -1
+            raise FileNotFoundError(self._name) from error

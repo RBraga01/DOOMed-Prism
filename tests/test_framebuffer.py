@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import os
 import secrets
 import sys
 
@@ -68,7 +69,10 @@ def test_latest_returns_the_active_slot_bytes_and_counter(
     assert (frame.width, frame.height, frame.stride) == (640, 480, STRIDE)
     assert frame.pixel_format == PIXEL_FORMAT_ARGB8888
     assert frame.counter == counter
-    assert bytes(frame.buffer) == second
+    buffer_copy = bytes(frame.buffer)
+    assert buffer_copy == second
+    # Release the frame (and its memoryview) before closing so the mapping can close
+    del frame
     reader.close()
 
 
@@ -118,3 +122,24 @@ def test_close_is_idempotent(writer, segment_name: str) -> None:
     reader.close()
     reader.close()
     assert reader.is_open is False
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX-specific race: undersized file")
+def test_try_open_retries_on_undersized_posix_file(segment_name: str) -> None:
+    # If the producer has opened /dev/shm/<name> but not yet ftruncate'd it
+    # to SEGMENT_SIZE, mmap raises ValueError. This must be caught and
+    # try_open must return False (not raise or leak the fd).
+    path = f"/dev/shm/{segment_name}"
+    fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        os.ftruncate(fd, 4096)  # Undersized file
+        os.close(fd)
+
+        reader = FrameReader(segment_name)
+        assert reader.try_open() is False
+        assert reader.is_open is False
+    finally:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
