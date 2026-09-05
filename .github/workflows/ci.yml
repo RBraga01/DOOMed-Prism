@@ -1,0 +1,122 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - feature/doomed-prism-m1
+      - feature/doomed-prism-m2
+      - main
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # PySide6 / Qt xcb + offscreen runtime libraries for the headless runner.
+  QT_HEADLESS_APT: >-
+    libgl1 libegl1 libopengl0 libxkbcommon0 libxkbcommon-x11-0 libdbus-1-3
+    libglib2.0-0 libfontconfig1 libfreetype6 libxrender1 libxi6 libxext6
+    libx11-6 libx11-xcb1 libxcb1 libxcb-cursor0 libxcb-icccm4 libxcb-image0
+    libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-shape0
+    libxcb-shm0 libxcb-sync1 libxcb-util1 libxcb-xfixes0 libxcb-xinerama0
+    libxcb-xkb1 xvfb
+
+jobs:
+  unit-and-safety:
+    name: Unit tests, publication safety, patch --check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # check_publication_safety.py --history walks all reachable objects
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install headless Qt runtime libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends $QT_HEADLESS_APT
+
+      - name: Install the package with dev extras
+        run: python -m pip install --upgrade pip && python -m pip install -e ".[dev]"
+
+      - name: pytest
+        run: xvfb-run -a python -m pytest -q
+
+      - name: Publication safety (working tree)
+        run: python scripts/check_publication_safety.py --root .
+
+      - name: Publication safety (full history)
+        run: python scripts/check_publication_safety.py --root . --history
+
+      - name: Crispy Doom patch applies cleanly
+        run: python scripts/build_crispy.py --check
+
+  linux-build-and-posix-smoke:
+    name: Linux build + POSIX shared-memory runtime smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install C toolchain, SDL2 dev libraries, Freedoom, xvfb
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake ninja-build pkg-config \
+            libsdl2-dev libsdl2-mixer-dev libsdl2-net-dev \
+            freedoom xvfb procps
+          # A lawful, freely redistributable IWAD provided by the distro package
+          # (/usr/share/games/doom/freedoom1.wad) — never committed to this repo.
+          test -f /usr/share/games/doom/freedoom1.wad
+
+      - name: Install the package (for pewpew.framebuffer)
+        run: python -m pip install --upgrade pip && python -m pip install -e .
+
+      - name: Linux build of the patched engine
+        id: build
+        run: |
+          set -o pipefail
+          python scripts/build_crispy.py | tee build.log
+          EXE=$(tail -n1 build.log)
+          test -x "$EXE"
+          echo "exe=$EXE" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Linux build validation"
+            echo ""
+            echo ":white_check_mark: \`scripts/build_crispy.py\` produced \`$EXE\` on ubuntu-latest (x86_64)."
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "::notice title=Linux build validation::patched Crispy Doom built on Linux x86_64 ($EXE)"
+
+      - name: POSIX shared-memory runtime smoke test
+        run: |
+          set -o pipefail
+          xvfb-run -a python scripts/ci_posix_smoke.py \
+            "${{ steps.build.outputs.exe }}" \
+            /usr/share/games/doom/freedoom1.wad | tee smoke.log
+          {
+            echo "### POSIX runtime validation"
+            echo ""
+            echo ":white_check_mark: The \`shm_open\` runtime path was exercised on Linux x86_64 — valid 640x480 segment, advancing \`frame_counter\`, clean teardown."
+            echo ""
+            echo '```'
+            cat smoke.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "::notice title=POSIX runtime validation::shm_open path exercised on Linux x86_64 (segment + advancing frame_counter + clean teardown)"
+
+      - name: Note on ARM64
+        if: always()
+        run: |
+          echo "### ARM64" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo ":warning: ARM64 remains explicitly outstanding — a GitHub Linux x86_64 runner does not validate it." >> "$GITHUB_STEP_SUMMARY"

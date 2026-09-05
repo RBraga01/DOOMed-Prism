@@ -62,10 +62,19 @@ development libraries.
 python scripts/build_crispy.py            # fetch the pinned tag, apply the
                                             # patch, and build; prints the
                                             # built executable path
-python scripts/build_crispy.py --check     # verify the patch applies cleanly,
-                                            # no build
+python scripts/build_crispy.py --check     # verify the pin + that the patch
+                                            # applies cleanly, no build
+python scripts/build_crispy.py --check --offline  # same, but skip the tarball
+                                            # download (commit pin still checked)
 python scripts/build_crispy.py --clean     # remove the build directory
 ```
+
+The pin in `crispy-doom.lock` is **enforced**, not just recorded: after the
+clone, `commit` is compared against the checkout's `git rev-parse HEAD` (a moved
+upstream tag aborts the run), and `tarball_sha256` is verified against the
+GitHub tag archive (`.../archive/refs/tags/<tag>.tar.gz`), downloaded with the
+Python standard library. Pass `--offline` to skip only that download (for
+`--check` in a network-less sandbox); the default build path always performs it.
 
 Point `DOOMED_PRISM_CRISPY_EXE` at the executable path the build prints.
 
