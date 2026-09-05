@@ -1,10 +1,44 @@
 # DOOMed Prism — Milestone 2 Design: Framebuffer Integration
 
 Date: 2026-09-04
-Status: Approved design, awaiting specification review
+Status: Implemented and validated on the Windows / Raven Simulator target
+(`docs/validation/milestone-2-result.md`: PASS). Cross-platform (POSIX / Linux /
+ARM64) validation is intentionally outstanding — the `shm_open` branch is
+code-reviewed, not built or run. No CI is established yet.
 Depends on: `2026-09-02-doomed-prism-design.md` (§3, §4, §5, §8, §9)
 Supersedes for the desktop path: the native-window embedding approach retired by
 Milestone 1 (`docs/validation/milestone-1-result.md`).
+
+## 0. Implementation deviations from this design (recorded 2026-09-05)
+
+Building against the real `crispy-doom-7.1` source surfaced two constraints this
+design did not anticipate. Both deviations were verified correct during the
+Milestone 2 decision-gate run; §4–§7 below are kept as the design that was
+approved, and this section is the authoritative record of where the shipped
+code differs. Full detail: `docs/validation/milestone-2-result.md` and the
+comments inside `patches/crispy-doom-fb-export.diff`.
+
+1. **Not `crispy->hires = 0` / not a native 640×480 source.** The engine has no
+   640×480 mode (`ORIGHEIGHT` is 200, not 240). The patch forces `hires = 1`
+   and `widescreen = 0` (gated on `DOOMED_PRISM_FB_NAME`), producing a
+   deterministic **640×400** source, which `FB_Export_Publish` nearest-neighbour
+   row-maps into the fixed 640×480 wire-format slot using Crispy's own
+   `6:5` (`actualheight = 6 * SCREENHEIGHT / 5`) aspect-correction ratio. The
+   wire format itself is unchanged: 640×480, stride 2560. So the "pins 640×480
+   non-hires" line in §2 and the `crispy->hires = 0` lines in §4/§5 describe the
+   original intent, not the shipped behaviour.
+
+2. **Frame publish only in the `CRISPY_TRUECOLOR` render path.** In the default
+   (non-truecolor) path, `argbbuffer->pixels` aliases a GPU-locked, write-only
+   streaming-texture region that segfaults on CPU read. `FB_Export_Publish` is
+   therefore called only from the `CRISPY_TRUECOLOR` branch of `I_FinishUpdate`,
+   and the top-level `CMakeLists.txt` option default is flipped `OFF → ON` so
+   `scripts/build_crispy.py` produces a working export by default. §5's "publish
+   immediately after `SDL_UpdateTexture`" holds only for that branch.
+
+A follow-up runtime shape guard (`argb->w != FB_WIDTH || argb->pitch < FB_STRIDE
+|| format != ARGB8888 → skip`) replaced the original one-time `assert`s, which
+`-DNDEBUG` in a Release build compiled out.
 
 ## 1. Problem
 
@@ -42,7 +76,10 @@ grabs them like any other painted content.
   (approach B; hardware phase).
 - Waveguide Boost tuning. Milestone 2 checks only that additive compositing is
   correct, not that it is enhanced.
-- Hires or multi-resolution export. Milestone 2 pins 640×480 non-hires.
+- Hires or multi-resolution export. Milestone 2 pins the wire format to
+  640×480. (As built, the source is 640×400 hires and row-mapped to 640×480 —
+  see §0; a native 640×480 source was the original intent but does not exist in
+  this engine.)
 - Audio. Crispy's default handling is left untouched and not evaluated.
 
 ## 3. Approaches considered
