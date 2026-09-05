@@ -9,8 +9,9 @@ underneath it is not.
 
 ![DOOM running inside the Raven Simulator](docs/media/raven-simulator.gif)
 
-*Crispy Doom playing live inside the Raven Simulator's Night mode — the game
-surface on the left is a Qt widget, not a native SDL window.*
+*The patched Crispy Doom engine running [Freedoom](https://freedoom.github.io/)
+live inside the Raven Simulator's Night mode — the game surface is a Qt widget,
+not a native SDL window.*
 
 ## Current status
 
