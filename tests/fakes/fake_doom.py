@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import subprocess
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 
 class FakePopen:
@@ -11,8 +11,9 @@ class FakePopen:
 
     next_pid = 4100
 
-    def __init__(self, arguments: Sequence[str]) -> None:
+    def __init__(self, arguments: Sequence[str], env: Mapping[str, str]) -> None:
         self.arguments = list(arguments)
+        self.env = dict(env)
         self.pid = type(self).next_pid
         type(self).next_pid += 1
         self.returncode: int | None = None
@@ -50,7 +51,7 @@ class FakePopenFactory:
     def __init__(self) -> None:
         self.processes: list[FakePopen] = []
 
-    def __call__(self, arguments: Sequence[str]) -> FakePopen:
-        process = FakePopen(arguments)
+    def __call__(self, arguments: Sequence[str], env: Mapping[str, str]) -> FakePopen:
+        process = FakePopen(arguments, env)
         self.processes.append(process)
         return process

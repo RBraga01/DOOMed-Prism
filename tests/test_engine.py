@@ -271,3 +271,37 @@ def test_run_desktop_validates_configuration_before_loading_the_optional_host(
     assert status == 2
     assert captured.out == ""
     assert captured.err == "ConfigurationError: DOOMED_PRISM_CRISPY_EXE is required\n"
+
+
+def test_start_passes_a_unique_frame_segment_name_through_the_child_environment(
+    tmp_path: Path,
+) -> None:
+    """Catches a missing or non-unique DOOMED_PRISM_FB_NAME for the export patch."""
+    factory = FakePopenFactory()
+    engine = DoomProcess(_runtime_config(tmp_path), popen_factory=factory)
+
+    engine.start()
+
+    name = engine.frame_segment_name
+    assert name is not None and name.startswith("doomed-prism-fb-")
+    assert factory.processes[0].env["DOOMED_PRISM_FB_NAME"] == name
+
+    other = DoomProcess(_runtime_config(tmp_path), popen_factory=FakePopenFactory())
+    other.start()
+    assert other.frame_segment_name != name
+
+
+def test_stop_clears_the_segment_name_after_the_child_exits(tmp_path: Path) -> None:
+    """Catches a stale segment name lingering after shutdown."""
+    factory = FakePopenFactory()
+
+    def close_window(pid: int) -> None:
+        factory.processes[0].returncode = 0
+
+    engine = DoomProcess(
+        _runtime_config(tmp_path), popen_factory=factory, graceful_close=close_window
+    )
+    engine.start()
+    engine.stop()
+
+    assert engine.frame_segment_name is None

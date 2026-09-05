@@ -1,0 +1,361 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index f2f41e0e..95d083bd 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -55,7 +55,17 @@ else()
+     add_compile_definitions(DISABLE_SDL2NET=1)
+ endif()
+ 
+-option(CRISPY_TRUECOLOR "True color rendering" OFF)
++# DOOMed Prism: the frame-export path (src/i_framebuffer_export.c) reads
++# argbbuffer->pixels to publish frames into shared memory. That is only a
++# safe, CPU-readable buffer in the CRISPY_TRUECOLOR path (a real
++# SDL_CreateRGBSurfaceWithFormat allocation the renderer draws into
++# directly). The default (truecolor off) path aliases argbbuffer->pixels to
++# a locked GPU streaming-texture region between SDL_LockTexture and
++# SDL_UnlockTexture, which is write-oriented on hardware-accelerated
++# renderers (observed to SIGSEGV on read against a Direct3D backend on
++# Windows) -- so this default is flipped to ON rather than left for callers
++# to remember to pass.
++option(CRISPY_TRUECOLOR "True color rendering" ON)
+ 
+ # Check for libsamplerate.
+ find_package(SampleRate)
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index 8b7fb8f6..eea331ee 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -75,6 +75,7 @@ set(GAME_SOURCE_FILES
+     i_cdmus.c           i_cdmus.h
+     i_endoom.c          i_endoom.h
+     i_flmusic.c
++    i_framebuffer_export.c i_framebuffer_export.h
+     i_glob.c            i_glob.h
+     i_input.c           i_input.h
+     i_joystick.c        i_joystick.h
+@@ -164,6 +165,11 @@ endif()
+ if(WIN32)
+ 	list(APPEND EXTRA_LIBS winmm shlwapi)
+ endif()
++if(UNIX AND NOT APPLE)
++    # DOOMed Prism: i_framebuffer_export.c uses shm_open()/shm_unlink(),
++    # which glibc ships in librt.
++    list(APPEND EXTRA_LIBS rt)
++endif()
+ 
+ if(WIN32)
+     add_executable("${PROGRAM_PREFIX}doom" WIN32 ${SOURCE_FILES_WITH_DEH} "${CMAKE_CURRENT_BINARY_DIR}/doom-res.rc")
+diff --git a/src/i_framebuffer_export.c b/src/i_framebuffer_export.c
+new file mode 100644
+index 00000000..3b6dbe4e
+--- /dev/null
++++ b/src/i_framebuffer_export.c
+@@ -0,0 +1,206 @@
++//
++// Copyright(C) 2026 DOOMed Prism contributors
++//
++// This program is free software; you can redistribute it and/or
++// modify it under the terms of the GNU General Public License
++// as published by the Free Software Foundation; either version 2
++// of the License, or (at your option) any later version.
++//
++// DOOMed Prism: publish each rendered frame into a shared-memory
++// triple-buffer for an external Qt host. Active only when the
++// environment variable DOOMED_PRISM_FB_NAME is set.
++//
++// Wire format (must stay byte-identical to src/pewpew/framebuffer.py):
++// a 64-byte header of 11 little-endian uint32_t values, followed by
++// three contiguous FB_SLOT_BYTES pixel slots. See the header layout
++// comment on fb_write_header() below.
++//
++// Resolution note: crispy-doom-7.1's internal frame buffer is
++// ORIGWIDTH<<hires by ORIGHEIGHT<<hires (320x200 at hires=0, 640x400
++// at hires=1 -- there is no native 640x480 mode; ORIGHEIGHT is 200,
++// not 240). i_video.c forces hires=1 and widescreen=0 for an active
++// export session (see the DOOMED_PRISM_FB_NAME check in
++// I_InitGraphics), which deterministically yields a 640x400 source
++// buffer. FB_Export_Publish then applies the same 6:5 vertical
++// stretch crispy's own aspect_ratio_correct path already applies at
++// on-screen presentation time (actualheight = 6 * SCREENHEIGHT / 5)
++// to fill the fixed 640x480 wire-format slot, via nearest-neighbour
++// row mapping. Width is asserted to already match (640); only the
++// height is resampled.
++//
++
++#include <stdatomic.h>
++#include <stdint.h>
++#include <stdlib.h>
++#include <string.h>
++#include "i_framebuffer_export.h"
++
++#ifdef _WIN32
++#include <windows.h>
++#else
++#include <fcntl.h>
++#include <signal.h>
++#include <sys/mman.h>
++#include <unistd.h>
++#endif
++
++#define FB_HEADER_SIZE 64
++#define FB_SLOT_COUNT 3
++#define FB_WIDTH 640
++#define FB_HEIGHT 480
++#define FB_STRIDE 2560
++#define FB_SLOT_BYTES (FB_STRIDE * FB_HEIGHT)          /* 1228800 */
++#define FB_SEGMENT_SIZE (FB_HEADER_SIZE + FB_SLOT_COUNT * FB_SLOT_BYTES)
++#define FB_MAGIC 0x50504642u
++#define FB_VERSION 1u
++#define FB_PIXFMT_ARGB8888 0x16362004u
++#define FB_FLAG_SHUTTING_DOWN 0x1u
++
++static int fb_enabled = 0;
++static const char *fb_name = NULL;
++static char fb_name_buf[256];
++static unsigned char *fb_base = NULL;
++static uint32_t fb_active = 0;
++static uint32_t fb_counter = 0;
++#ifdef _WIN32
++static HANDLE fb_handle = NULL;
++#else
++static int fb_fd = -1;
++#endif
++
++static void fb_write_header(uint32_t flags)
++{
++    uint32_t *h = (uint32_t *) fb_base;
++    h[0] = FB_MAGIC;      h[1] = FB_VERSION;   h[2] = FB_SLOT_COUNT;
++    h[3] = FB_SLOT_BYTES; h[4] = FB_WIDTH;     h[5] = FB_HEIGHT;
++    h[6] = FB_STRIDE;     h[7] = FB_PIXFMT_ARGB8888;
++    h[8] = fb_active;     h[9] = fb_counter;   h[10] = flags;
++}
++
++#ifndef _WIN32
++// DOOMed Prism: Crispy Doom installs no SIGINT/SIGTERM handler on POSIX, so a
++// signalled stop terminates the process before I_AtExit(I_ShutdownGraphics)
++// runs and the shm segment is never shm_unlink()ed. Clean it up here, then
++// restore the default disposition and re-raise so the process still dies from
++// the signal exactly as it did before.
++//
++// shm_unlink() is not on POSIX's formal async-signal-safe list, but it is a
++// thin syscall wrapper used routinely from terminating cleanup handlers, and
++// there is no polling point in this export path where a deferred-cleanup
++// alternative could run instead. FB_Export_Shutdown() is guarded by
++// fb_enabled, so it is idempotent if it also runs from atexit.
++static void fb_signal_handler(int sig)
++{
++    FB_Export_Shutdown();
++    signal(sig, SIG_DFL);
++    raise(sig);
++}
++#endif
++
++void FB_Export_Init(void)
++{
++    const char *env = getenv("DOOMED_PRISM_FB_NAME");
++    if (env == NULL || env[0] == '\0') { fb_enabled = 0; return; }
++    strncpy(fb_name_buf, env, sizeof(fb_name_buf) - 1);
++    fb_name_buf[sizeof(fb_name_buf) - 1] = '\0';
++    fb_name = fb_name_buf;
++
++#ifdef _WIN32
++    fb_handle = CreateFileMappingA(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE,
++                                   0, FB_SEGMENT_SIZE, fb_name);
++    if (fb_handle == NULL) { fb_enabled = 0; return; }
++    fb_base = (unsigned char *) MapViewOfFile(fb_handle, FILE_MAP_ALL_ACCESS,
++                                              0, 0, FB_SEGMENT_SIZE);
++    if (fb_base == NULL) { CloseHandle(fb_handle); fb_enabled = 0; return; }
++#else
++    shm_unlink(fb_name);
++    fb_fd = shm_open(fb_name, O_CREAT | O_RDWR, 0600);
++    if (fb_fd < 0) { fb_enabled = 0; return; }
++    if (ftruncate(fb_fd, FB_SEGMENT_SIZE) != 0) { close(fb_fd); fb_enabled = 0; return; }
++    fb_base = mmap(NULL, FB_SEGMENT_SIZE, PROT_READ | PROT_WRITE,
++                   MAP_SHARED, fb_fd, 0);
++    /* POSIX mmap() signals failure with MAP_FAILED ((void *) -1), never
++     * NULL -- a shared NULL-only check here would let a failed mapping
++     * through and the memset() below would write through an invalid
++     * pointer. */
++    if (fb_base == MAP_FAILED) { close(fb_fd); fb_base = NULL; fb_enabled = 0; return; }
++#endif
++    memset(fb_base, 0, FB_HEADER_SIZE);
++    fb_active = 0; fb_counter = 0;
++    fb_write_header(0);
++    fb_enabled = 1;
++
++#ifndef _WIN32
++    // Segment is mapped and the header is written: arm the teardown handler
++    // for a signalled stop (see fb_signal_handler above). sigaction(), not
++    // signal(), for defined cross-platform semantics; no SA_RESTART so the
++    // signal is free to terminate the process after we re-raise it.
++    struct sigaction sa;
++    memset(&sa, 0, sizeof(sa));
++    sa.sa_handler = fb_signal_handler;
++    sigemptyset(&sa.sa_mask);
++    sa.sa_flags = 0;
++    sigaction(SIGINT, &sa, NULL);
++    sigaction(SIGTERM, &sa, NULL);
++#endif
++}
++
++void FB_Export_Publish(SDL_Surface *argb)
++{
++    if (!fb_enabled) { return; }
++    if (argb->w != FB_WIDTH || argb->pitch < FB_STRIDE
++        || argb->format->format != FB_PIXFMT_ARGB8888)
++    {
++        return;
++    }
++
++    uint32_t next = (fb_active + 1u) % FB_SLOT_COUNT;
++    unsigned char *dst = fb_base + FB_HEADER_SIZE + next * FB_SLOT_BYTES;
++
++    if (argb->h == FB_HEIGHT && argb->pitch == FB_STRIDE)
++    {
++        /* Common case (source already matches the wire-format shape):
++         * a single contiguous copy. */
++        memcpy(dst, argb->pixels, FB_SLOT_BYTES);
++    }
++    else
++    {
++        /* Source height differs from the fixed FB_HEIGHT slot (e.g. the
++         * 640x400 buffer crispy-doom-7.1 actually renders at hires=1).
++         * Nearest-neighbour row-map into FB_HEIGHT rows -- see the file
++         * header comment for why this mirrors crispy's own aspect
++         * correction ratio instead of an arbitrary crop or letterbox. */
++        const unsigned char *src = (const unsigned char *) argb->pixels;
++        int src_h = argb->h;
++        int src_pitch = argb->pitch;
++        int oy;
++        for (oy = 0; oy < FB_HEIGHT; oy++)
++        {
++            int sy = (oy * src_h) / FB_HEIGHT;
++            if (sy >= src_h) { sy = src_h - 1; }
++            memcpy(dst + (size_t) oy * FB_STRIDE,
++                   src + (size_t) sy * src_pitch, FB_STRIDE);
++        }
++    }
++
++    atomic_thread_fence(memory_order_release);
++    fb_active = next;
++    fb_counter = fb_counter + 1u;   /* u32 wrap is intentional */
++    fb_write_header(0);
++}
++
++void FB_Export_Shutdown(void)
++{
++    if (!fb_enabled) { return; }
++    fb_write_header(FB_FLAG_SHUTTING_DOWN);
++#ifdef _WIN32
++    UnmapViewOfFile(fb_base);
++    CloseHandle(fb_handle);
++#else
++    munmap(fb_base, FB_SEGMENT_SIZE);
++    close(fb_fd);
++    shm_unlink(fb_name);
++#endif
++    fb_enabled = 0;
++    fb_base = NULL;
++}
+diff --git a/src/i_framebuffer_export.h b/src/i_framebuffer_export.h
+new file mode 100644
+index 00000000..ea3ac100
+--- /dev/null
++++ b/src/i_framebuffer_export.h
+@@ -0,0 +1,23 @@
++//
++// Copyright(C) 2026 DOOMed Prism contributors
++//
++// This program is free software; you can redistribute it and/or
++// modify it under the terms of the GNU General Public License
++// as published by the Free Software Foundation; either version 2
++// of the License, or (at your option) any later version.
++//
++// DOOMed Prism: publish each rendered frame into a shared-memory
++// triple-buffer for an external Qt host. Active only when the
++// environment variable DOOMED_PRISM_FB_NAME is set.
++//
++
++#ifndef I_FRAMEBUFFER_EXPORT_H
++#define I_FRAMEBUFFER_EXPORT_H
++
++#include "SDL.h"
++
++void FB_Export_Init(void);
++void FB_Export_Publish(SDL_Surface *argb);
++void FB_Export_Shutdown(void);
++
++#endif
+diff --git a/src/i_video.c b/src/i_video.c
+index 60ffb438..bee58414 100644
+--- a/src/i_video.c
++++ b/src/i_video.c
+@@ -36,6 +36,7 @@
+ #include "d_loop.h"
+ #include "deh_str.h"
+ #include "doomtype.h"
++#include "i_framebuffer_export.h"
+ #include "i_input.h"
+ #include "i_joystick.h"
+ #include "i_system.h"
+@@ -300,6 +301,8 @@ void I_ShutdownGraphics(void)
+     {
+         SetShowCursor(true);
+ 
++        FB_Export_Shutdown();
++
+         SDL_FreeSurface(argbbuffer);
+ #ifndef CRISPY_TRUECOLOR
+         SDL_FreeSurface(screenbuffer);
+@@ -884,8 +887,17 @@ void I_FinishUpdate (void)
+                     &argbbuffer->pitch);
+     SDL_LowerBlit(screenbuffer, &blit_rect, argbbuffer, &blit_rect);
+     SDL_UnlockTexture(texture);
++    // DOOMed Prism: NOT safe here -- in this (non-CRISPY_TRUECOLOR) build,
++    // argbbuffer->pixels aliases a locked GPU streaming-texture region
++    // (see SDL_LockTexture above) that is write-oriented on
++    // hardware-accelerated renderers; reading it back for export segfaults
++    // on Direct3D on Windows. FB_Export_Publish only runs in the
++    // CRISPY_TRUECOLOR branch below, where argbbuffer is instead a real,
++    // CPU-readable heap surface the renderer draws into directly. See the
++    // CRISPY_TRUECOLOR option comment in the top-level CMakeLists.txt.
+ #else
+     SDL_UpdateTexture(texture, NULL, argbbuffer->pixels, argbbuffer->pitch);
++    FB_Export_Publish(argbbuffer);
+ #endif
+ 
+     // Make sure the pillarboxes are kept clear each frame.
+@@ -1791,7 +1803,20 @@ void I_InitGraphics(void)
+ #endif
+     char *env;
+ 
+-    // Pass through the XSCREENSAVER_WINDOW environment variable to 
++    // DOOMed Prism: when exporting frames to shared memory, force a
++    // deterministic 640x400 internal render buffer (hires=1 is already
++    // crispy's default; widescreen defaults to "match the display" and
++    // must be forced off so SCREENWIDTH is always exactly 640 regardless
++    // of monitor aspect ratio). This must happen before I_GetScreenDimensions()
++    // below computes SCREENWIDTH/SCREENHEIGHT and the surfaces are sized.
++    if (getenv("DOOMED_PRISM_FB_NAME") != NULL
++        && getenv("DOOMED_PRISM_FB_NAME")[0] != '\0')
++    {
++        crispy->hires = 1;
++        crispy->widescreen = 0;
++    }
++
++    // Pass through the XSCREENSAVER_WINDOW environment variable to
+     // SDL_WINDOWID, to embed the SDL window into the Xscreensaver
+     // window.
+ 
+@@ -1895,6 +1920,11 @@ void I_InitGraphics(void)
+ 
+     initialized = true;
+ 
++    // DOOMed Prism: the renderer, argbbuffer and texture are all created
++    // and sized above; open (or no-op if DOOMED_PRISM_FB_NAME is unset)
++    // the shared-memory export segment now.
++    FB_Export_Init();
++
+     // Call I_ShutdownGraphics on quit
+ 
+     I_AtExit(I_ShutdownGraphics, true);

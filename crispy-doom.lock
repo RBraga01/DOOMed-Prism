@@ -1,0 +1,4 @@
+repo = "https://github.com/fabiangreffrath/crispy-doom"
+tag = "crispy-doom-7.1"
+commit = "0a022e0ee6c74d9bab173ed9ee5212312e90ce3a"
+tarball_sha256 = "f0eb02afb81780165ddc81583ed5648cbee8b3205bcc27e181b3f61eb26f8416"
