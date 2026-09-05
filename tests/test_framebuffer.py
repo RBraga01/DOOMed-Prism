@@ -116,6 +116,39 @@ def test_unexpected_pixel_format_raises_frame_segment_error(
         reader.try_open()
 
 
+def test_wrong_width_raises_frame_segment_error(writer, segment_name: str) -> None:
+    writer.write_raw_header(width=320)
+    reader = FrameReader(segment_name)
+    with pytest.raises(FrameSegmentError):
+        reader.try_open()
+
+
+def test_wrong_height_raises_frame_segment_error(writer, segment_name: str) -> None:
+    writer.write_raw_header(height=240)
+    reader = FrameReader(segment_name)
+    with pytest.raises(FrameSegmentError):
+        reader.try_open()
+
+
+def test_wrong_stride_raises_frame_segment_error(writer, segment_name: str) -> None:
+    writer.write_raw_header(stride=1280)
+    reader = FrameReader(segment_name)
+    with pytest.raises(FrameSegmentError):
+        reader.try_open()
+
+
+def test_out_of_range_active_index_makes_latest_none(
+    writer, segment_name: str
+) -> None:
+    writer.write_frame(bytes(SLOT_BYTES))
+    writer.write_raw_header(active_index=99)
+
+    reader = FrameReader(segment_name)
+    reader.try_open()
+    assert reader.latest() is None
+    reader.close()
+
+
 def test_close_is_idempotent(writer, segment_name: str) -> None:
     reader = FrameReader(segment_name)
     reader.try_open()

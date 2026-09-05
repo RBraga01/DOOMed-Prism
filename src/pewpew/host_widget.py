@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import sys
 import time
 from collections.abc import Callable
 from typing import Protocol
@@ -107,6 +106,7 @@ else:
             self._shutdown_requested = False
             self._deadline = 0.0
             self._last_counter: int | None = None
+            self._seen_frame = False
 
             self.setFixedSize(self._HOST_WIDTH, self._HOST_HEIGHT)
             self.setAutoFillBackground(False)
@@ -164,15 +164,22 @@ else:
             if not reader.is_open:
                 try:
                     opened = reader.try_open()
-                except FrameSegmentError:
+                except FrameSegmentError as error:
                     self._cleanup_after_startup_failure()
-                    raise RuntimeError("frame segment is invalid")
+                    raise RuntimeError("frame segment is invalid") from error
                 if not opened:
                     if self._engine.poll() is not None or self._clock() > self._deadline:
                         self._cleanup_after_startup_failure()
                         raise RuntimeError("engine did not export frames")
                     return
             frame = reader.latest()
+            if frame is not None:
+                self._seen_frame = True
+            elif not self._seen_frame:
+                if self._engine.poll() is not None or self._clock() > self._deadline:
+                    self._cleanup_after_startup_failure()
+                    raise RuntimeError("engine did not export frames")
+                return
             counter = frame.counter if frame is not None else None
             if counter != self._last_counter:
                 self._last_counter = counter

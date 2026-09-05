@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import time
 from types import SimpleNamespace
 
 import pytest
@@ -150,6 +149,24 @@ def test_missing_segment_past_deadline_raises(qtbot) -> None:
     engine = _Engine()
     reader = _Reader()
     reader.available = False
+    clock_values = iter([0.0, 100.0])  # showEvent sets deadline=10.0; tick sees 100.0
+    config = SimpleNamespace(viewport_width=640, viewport_height=480)
+    host = DoomHostWidget(
+        config, engine=engine, frame_reader=reader, clock=lambda: next(clock_values)
+    )
+    qtbot.addWidget(host)
+    host.show()
+
+    with pytest.raises(RuntimeError, match="did not export frames"):
+        host._on_tick()
+    assert engine.stop_calls == 1
+
+
+def test_open_segment_with_no_frame_past_deadline_raises(qtbot) -> None:
+    """Spec §7: an opened-but-silent segment must still time out, not hang."""
+    engine = _Engine()
+    reader = _Reader()
+    reader.is_open = True  # segment already open, but no frame was ever published
     clock_values = iter([0.0, 100.0])  # showEvent sets deadline=10.0; tick sees 100.0
     config = SimpleNamespace(viewport_width=640, viewport_height=480)
     host = DoomHostWidget(

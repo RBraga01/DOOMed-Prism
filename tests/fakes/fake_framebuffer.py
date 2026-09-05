@@ -48,18 +48,24 @@ class FakeFramebufferWriter:
         magic: int = MAGIC,
         version: int = VERSION,
         pixel_format: int = PIXEL_FORMAT_ARGB8888,
+        width: int = WIDTH,
+        height: int = HEIGHT,
+        stride: int = STRIDE,
+        slot_count: int = SLOT_COUNT,
+        slot_bytes: int = SLOT_BYTES,
+        active_index: int | None = None,
     ) -> None:
         self._map[0:HEADER_SIZE] = b"\x00" * HEADER_SIZE
         self._map[0 : _HEADER.size] = _HEADER.pack(
             magic,
             version,
-            SLOT_COUNT,
-            SLOT_BYTES,
-            WIDTH,
-            HEIGHT,
-            STRIDE,
+            slot_count,
+            slot_bytes,
+            width,
+            height,
+            stride,
             pixel_format,
-            self._active,
+            self._active if active_index is None else active_index,
             self._counter,
             self._flags,
         )
@@ -70,8 +76,24 @@ class FakeFramebufferWriter:
         magic: int = MAGIC,
         version: int = VERSION,
         pixel_format: int = PIXEL_FORMAT_ARGB8888,
+        width: int = WIDTH,
+        height: int = HEIGHT,
+        stride: int = STRIDE,
+        slot_count: int = SLOT_COUNT,
+        slot_bytes: int = SLOT_BYTES,
+        active_index: int | None = None,
     ) -> None:
-        self._write_header(magic=magic, version=version, pixel_format=pixel_format)
+        self._write_header(
+            magic=magic,
+            version=version,
+            pixel_format=pixel_format,
+            width=width,
+            height=height,
+            stride=stride,
+            slot_count=slot_count,
+            slot_bytes=slot_bytes,
+            active_index=active_index,
+        )
 
     def write_frame(self, pixels: bytes) -> int:
         if len(pixels) != SLOT_BYTES:

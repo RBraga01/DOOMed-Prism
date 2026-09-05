@@ -65,7 +65,8 @@ class FrameReader:
             self._fd = -1
             return False
         fields = _HEADER.unpack(self._map[0 : _HEADER.size])
-        magic, version, pixel_format = fields[0], fields[1], fields[7]
+        (magic, version, slot_count, slot_bytes, width, height, stride,
+         pixel_format, _active_index, _frame_counter, _flags) = fields
         # On Windows, mmap with a tagname creates a fresh zero-filled mapping
         # when the name does not exist yet. Treat an all-zero header as
         # "producer has not written it yet" and retry, rather than as an error.
@@ -76,6 +77,17 @@ class FrameReader:
             magic != MAGIC
             or version != VERSION
             or pixel_format != PIXEL_FORMAT_ARGB8888
+        ):
+            self.close()
+            raise FrameSegmentError(
+                f"segment {self._name!r} header is invalid or unsupported"
+            )
+        if (
+            slot_count != SLOT_COUNT
+            or slot_bytes != SLOT_BYTES
+            or width != WIDTH
+            or height != HEIGHT
+            or stride != STRIDE
         ):
             self.close()
             raise FrameSegmentError(
@@ -92,10 +104,11 @@ class FrameReader:
          pixel_format, active_index, frame_counter, flags) = fields
         if frame_counter == 0 or flags & FLAG_SHUTTING_DOWN:
             return None
+        if active_index >= SLOT_COUNT:
+            return None
         offset = HEADER_SIZE + active_index * SLOT_BYTES
         buffer = memoryview(mapping)[offset : offset + SLOT_BYTES]
-        counter_after = _HEADER.unpack(mapping[0 : _HEADER.size])[9]
-        return Frame(width, height, stride, pixel_format, counter_after, buffer)
+        return Frame(width, height, stride, pixel_format, frame_counter, buffer)
 
     def close(self) -> None:
         if self._map is not None:
