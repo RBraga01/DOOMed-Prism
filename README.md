@@ -78,6 +78,22 @@ decision gate M1 failed.
 
 The full investigation lives in [`docs/validation/`](docs/validation/).
 
+## Why Raven?
+
+Raven Prism is a useful target for this experiment because it exposes a
+developer‑oriented stack, a simulator that lets the rendering path be tested
+before hardware access, and an interaction model that is interesting for
+hands‑free controls.
+
+DOOMed Prism is not about turning smart glasses into a gaming device. It is a
+deliberately extreme test case for rendering, input, latency, compositor
+behaviour, and unconventional interaction on wearable displays. DOOM is the
+stress test, not the point.
+
+Raven is the current target, not a permanent dependency. The longer‑term goal is
+to keep the engine/input boundary portable enough that other smart‑glasses
+platforms could be explored later.
+
 ## Quick start
 
 Windows is the primary local development path — Raven Simulator validation
@@ -188,6 +204,24 @@ libraries, or credentials.
 python scripts/check_publication_safety.py --root .
 python scripts/check_publication_safety.py --root . --history
 ```
+
+## Disclaimer
+
+DOOMed Prism is an independent, unofficial experimental project.
+
+It is not affiliated with, endorsed by, or sponsored by Raven Resonance,
+id Software, Bethesda Softworks, ZeniMax Media, or their affiliates.
+
+"Raven Prism", "DOOM", "Crispy Doom", and other product or project names
+referenced here belong to their respective owners.
+
+This repository does not distribute Raven Framework source code, commercial DOOM
+IWADs, game assets, executables, or other proprietary third‑party content. Users
+must provide any required external software or game data separately and in
+accordance with its applicable license.
+
+The Raven Simulator is used as a development and validation target. Behaviour on
+real Raven Prism hardware has not yet been validated.
 
 ## License
 
