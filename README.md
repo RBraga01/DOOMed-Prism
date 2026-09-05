@@ -1,96 +1,196 @@
 # DOOMed Prism
 
-DOOMed Prism is the publication-safe Python foundation for the PewPew Engine
-project. This repository intentionally contains no Raven framework code, Doom
-game data, executables, shared libraries, or credentials.
+**Can it run DOOM?** Apparently Raven can. 😅
 
-## Development
+DOOMed Prism is an experimental DOOM port for Raven Prism smart glasses. The
+game already runs inside the Raven Simulator, composited through a Qt‑painted
+shared‑memory framebuffer. The ridiculous part is intentional. The engineering
+underneath it is not.
 
-Use Python 3.10 or later. Install development dependencies with:
+![DOOM running inside the Raven Simulator](docs/media/raven-simulator.gif)
 
-```bash
-python -m pip install -e '.[dev]'
+*Crispy Doom playing live inside the Raven Simulator's Night mode — the game
+surface on the left is a Qt widget, not a native SDL window.*
+
+## Current status
+
+**Milestone 2 is complete: framebuffer integration is viable.** Real DOOM frames
+are visible and updating inside the Raven Simulator.
+
+- Validated on Windows 11 in **Raw, Night, Day, Outdoors and Camera** modes —
+  live, updating pixels composited by the real Raven Simulator compositor.
+- Linux x86_64 build is validated in GitHub Actions.
+- The POSIX `shm_open` runtime path is exercised in CI: a valid 640×480
+  shared‑memory segment, a validated header, an advancing `frame_counter`, and a
+  clean teardown that leaves no `/dev/shm` segment behind.
+- The Crispy Doom pin in `crispy-doom.lock` is now actually enforced, not just
+  recorded.
+- The Python test suite is **103 passing**.
+
+**Not yet validated:** ARM64, and real Raven Prism hardware. The simulator is an
+optical preview, not the device.
+
+## What comes next
+
+Milestone 3 is about input — because right now the only thing you can do is
+watch DOOM run.
+
+- **Gaze** to steer and turn.
+- **Double blink** as a deliberate action — probably `FIRE`.
+- **Voice** for menus and weapon switching.
+- A spoken **"pew pew"** as a fire command. This one is not a joke; it is a
+  design goal.
+
+None of these exist yet.
+
+## How it works
+
+```
+Crispy Doom
+  ↓  patched framebuffer exporter (opt-in via DOOMED_PRISM_FB_NAME)
+shared-memory triple buffer
+  ↓  pewpew.framebuffer.FrameReader  (stdlib mmap, zero-copy)
+Qt-painted Raven viewport  (a plain QWidget, no native window)
+  ↓
+Raven Simulator compositor  (QWidget.grab())
 ```
 
-Before committing, scan exactly the staged index. Before a release or public
-handoff, also scan every object reachable from local branches and tags:
+- No native Win32 window reparenting anymore.
+- The shared‑memory framebuffer is now the rendering foundation.
+- Because the viewport is an ordinary Qt‑painted widget, Raven captures the
+  result through its own `QWidget.grab()` compositor, in every mode.
 
-```bash
-python scripts/check_publication_safety.py --root .
-python scripts/check_publication_safety.py --root . --history
-```
+## Why shared memory?
 
-## Local Doom runtime
+Milestone 1 tried the obvious thing: launch Crispy Doom as a normal process and
+reparent its native SDL window into the Qt app with `SetParent`.
 
-Install Crispy Doom and provide an IWAD locally. In PowerShell, set the paths
-for the current session:
+The Win32 embedding itself worked — correct geometry, correct DPI, clean
+lifecycle. But Raven Simulator composites applications through
+`QWidget.grab()`, which walks the Qt widget tree and never sees a foreign native
+child window. In every mode, the embedded game was a blank rectangle.
 
-```powershell
-$env:DOOMED_PRISM_CRISPY_EXE = "C:\path\to\crispy-doom.exe"
-$env:DOOMED_PRISM_IWAD = "C:\path\to\freedoom1.wad"
-```
+That architecture was retired. Milestone 2 moved rendering to a shared‑memory
+segment the engine writes and a Qt widget paints — and that path passed the same
+decision gate M1 failed.
 
-You may instead point `DOOMED_PRISM_IWAD` to a lawfully obtained commercial
-IWAD, but never add an IWAD to Git.
+The full investigation lives in [`docs/validation/`](docs/validation/).
 
-`DOOMED_PRISM_CRISPY_EXE` must point at Crispy Doom built by this project's
-patch (see below) — a stock, unmodified Crispy Doom build will not export
-frames, and the app will eventually raise "engine did not export frames".
+## Quick start
 
-### Building the patched engine
+Windows is the primary local development path — Raven Simulator validation
+happened there.
 
-The app reads frames from a shared-memory segment that a small, committed
-patch (`patches/crispy-doom-fb-export.diff`) adds to Crispy Doom. Build it
-with `scripts/build_crispy.py` rather than a stock Crispy Doom checkout.
+1. **Python 3.10+.** Install dev dependencies:
 
-**Prerequisite:** a C toolchain plus SDL2, SDL2_mixer, and SDL2_net
-development libraries.
+   ```bash
+   python -m pip install -e ".[dev]"
+   ```
+
+2. **Build the patched Crispy Doom engine** (a stock build will not export
+   frames — see the next section for prerequisites):
+
+   ```bash
+   python scripts/build_crispy.py
+   ```
+
+3. **Point the app at the engine and an IWAD.** In PowerShell:
+
+   ```powershell
+   $env:DOOMED_PRISM_CRISPY_EXE = "<path printed by build_crispy.py>"
+   $env:DOOMED_PRISM_IWAD       = "C:\path\to\freedoom1.wad"
+   ```
+
+   Use a lawfully obtained IWAD. [Freedoom](https://freedoom.github.io/) is a
+   free, redistributable option. You may instead point `DOOMED_PRISM_IWAD` at a
+   commercial `DOOM.WAD` / `DOOM2.WAD` you own — but **never commit an IWAD to
+   this repository.**
+
+## Building the patched engine
+
+The app reads frames from a shared‑memory segment that a small, committed patch
+(`patches/crispy-doom-fb-export.diff`) adds to Crispy Doom. Build it with
+`scripts/build_crispy.py`, not a stock checkout.
+
+**Prerequisite:** a C toolchain plus SDL2, SDL2_mixer, and SDL2_net development
+libraries.
 
 - Windows (MSYS2 UCRT64):
+
   ```bash
   pacman -S mingw-w64-ucrt-x86_64-toolchain mingw-w64-ucrt-x86_64-cmake \
       mingw-w64-ucrt-x86_64-ninja mingw-w64-ucrt-x86_64-pkgconf \
       mingw-w64-ucrt-x86_64-SDL2 mingw-w64-ucrt-x86_64-SDL2_mixer \
       mingw-w64-ucrt-x86_64-SDL2_net
   ```
-- Linux: install the equivalent toolchain and `libsdl2-dev`,
-  `libsdl2-mixer-dev`, `libsdl2-net-dev` packages from your distribution.
+
+- Linux: the equivalent toolchain plus `libsdl2-dev`, `libsdl2-mixer-dev`,
+  `libsdl2-net-dev`.
 
 **Usage:**
 
 ```bash
-python scripts/build_crispy.py            # fetch the pinned tag, apply the
-                                            # patch, and build; prints the
-                                            # built executable path
-python scripts/build_crispy.py --check     # verify the pin + that the patch
-                                            # applies cleanly, no build
-python scripts/build_crispy.py --check --offline  # same, but skip the tarball
-                                            # download (commit pin still checked)
-python scripts/build_crispy.py --clean     # remove the build directory
+python scripts/build_crispy.py            # fetch the pinned tag, apply the patch,
+                                          # build; prints the built exe path
+python scripts/build_crispy.py --check    # verify the pin and that the patch
+                                          # applies cleanly; no build
+python scripts/build_crispy.py --check --offline   # same, skipping the tarball
+                                          # download (the commit pin is still checked)
+python scripts/build_crispy.py --clean    # remove the build directory
 ```
 
-The pin in `crispy-doom.lock` is **enforced**, not just recorded: after the
-clone, `commit` is compared against the checkout's `git rev-parse HEAD` (a moved
-upstream tag aborts the run), and `tarball_sha256` is verified against the
-GitHub tag archive (`.../archive/refs/tags/<tag>.tar.gz`), downloaded with the
-Python standard library. Pass `--offline` to skip only that download (for
-`--check` in a network-less sandbox); the default build path always performs it.
+**The pin is enforced.** After cloning the tag, the checkout's
+`git rev-parse HEAD` must equal `commit` in `crispy-doom.lock` — a moved upstream
+tag aborts the run — and `tarball_sha256` is verified against the GitHub tag
+archive, downloaded with the Python standard library. `--offline` skips only that
+download.
 
-Point `DOOMED_PRISM_CRISPY_EXE` at the executable path the build prints.
+**Windows git‑on‑`PATH` hazard:** MSYS2 ships its own `git` in
+`C:\msys64\usr\bin`, and it can fail to apply the patch where Git for Windows'
+`git` succeeds. If `git apply` fails with "patch does not apply" even though the
+patch is fine, keep `C:\msys64\usr\bin` off `PATH` — only
+`C:\msys64\ucrt64\bin` (the compiler) is needed there.
 
-**Windows git-on-`PATH` hazard:** MSYS2 ships its own `git` in
-`C:\msys64\usr\bin`, and it can fail to apply
-`patches/crispy-doom-fb-export.diff` where Git for Windows' `git` succeeds.
-If `git apply` (or `scripts/build_crispy.py`) fails with "patch does not
-apply" even though the patch is fine, make sure `C:\msys64\usr\bin` is not
-ahead of Git for Windows on `PATH` — only `C:\msys64\ucrt64\bin` (the
-compiler toolchain itself) is needed there.
+**Windows runtime DLLs:** the built `crispy-doom.exe` dynamically links SDL2,
+SDL2_mixer, and SDL2_net. Add the toolchain's `bin` directory to `PATH` when
+launching it, or copy those DLLs next to the executable.
 
-**Windows runtime DLLs:** the built `crispy-doom.exe` dynamically links
-SDL2, SDL2_mixer, and SDL2_net. Either add the toolchain's `bin` directory
-(e.g. `C:\msys64\ucrt64\bin`) to `PATH` when launching it, or copy those
-runtime DLLs next to the built executable.
+## Validation and CI
 
-Original PewPew Engine code is licensed under GPL-2.0-or-later. Source
-distributions include the canonical GPL-2.0 text and deliberately exclude the
-test suite, whose dependencies are development-only.
+GitHub Actions (`.github/workflows/ci.yml`) runs, on `ubuntu-latest`:
+
+- `pytest`
+- publication safety — working tree and full history
+- `build_crispy.py --check` (patch applies + pin verified)
+- a real Linux build of the patched engine
+- a **POSIX runtime smoke test**: launch the built engine with a
+  distro‑provided Freedoom IWAD, attach with `FrameReader`, and assert a valid
+  640×480 segment, an advancing `frame_counter`, and a clean teardown with no
+  leftover `/dev/shm` segment.
+
+What this does and does not prove:
+
+- **Windows + Raven Simulator** is the actual proof that Raven's compositor
+  captures the game. CI does not run the Raven Simulator.
+- **Linux CI** proves the portable pieces — the build, the shared‑memory
+  protocol, the teardown — independently of Raven.
+- **ARM64** remains outstanding.
+
+## Publication safety
+
+Every commit must be safe to publish. The repository must never contain Raven
+framework source, commercial DOOM game data, IWADs, executables, shared
+libraries, or credentials.
+
+```bash
+python scripts/check_publication_safety.py --root .
+python scripts/check_publication_safety.py --root . --history
+```
+
+## License
+
+Original DOOMed Prism / PewPew Engine code is licensed under GPL-2.0-or-later.
+Crispy Doom and the frame‑export patch fall under Crispy Doom's own GPL-2.0
+terms; this repository ships only the patch and a pinned reference, never
+upstream engine source. Source distributions include the canonical GPL-2.0 text
+and deliberately exclude the test suite, whose dependencies are development‑only.
