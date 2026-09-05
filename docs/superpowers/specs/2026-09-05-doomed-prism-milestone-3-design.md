@@ -93,21 +93,39 @@ low likelihood.
 `patches/crispy-doom-fb-export.diff` (the shipped M2 patch, **unchanged**) is
 patch 1. `patches/crispy-doom-ipc-input.diff` is patch 2, authored against the
 tree with **patch 1 already applied**, so its context lines legitimately include
-patch-1 additions (e.g. `FB_Export_Init();` in `i_video.c`). The two diffs may
-share context but must not both *modify* the same line.
+patch-1 additions (e.g. `FB_Export_Init();` in `i_video.c`). Patch 2 only ever
+*adds* lines within regions patch 1 introduced or leaves untouched; neither diff
+emits a change to a line the other also changes.
 
-`scripts/build_crispy.py` holds an ordered `PATCHES` tuple and applies the whole
-series in one `git apply <p1> <p2>` invocation (git applies multiple patch files
-as one in-memory sequence); `--check` is the matching single
-`git apply --check <p1> <p2>`. The `.doomed-prism-applied` marker is written
-exactly once, only after the whole series applies. SDL keyboard input in Crispy
-is **left untouched** — IPC is an *additional* event source.
+`scripts/build_crispy.py` holds an ordered `PATCHES` tuple and applies the
+series **cumulatively**, restoring the checkout to a pristine pinned state
+first. `git apply` does **not** compose multiple patch-file arguments as one
+in-memory sequence — a later file's hunks are validated against the tree as it
+was before the command, not after an earlier file — so the series is applied
+one file at a time, on disk, in order:
+
+- **Build / apply (marker absent):**
+  `git -C <dir> reset --hard <lock.commit>` and `git -C <dir> clean -fd`
+  (removes patch-2's new files and any partial prior apply), then
+  `git -C <dir> apply <p1>`, then `git -C <dir> apply <p2>`, then write the
+  `.doomed-prism-applied` marker **once**. A failure at any step leaves no
+  marker; the next run's `reset --hard` + `clean -fd` restores pristine and the
+  whole series is re-attempted from scratch.
+- **`--check`:** same `reset --hard` + `clean -fd`, then
+  `git -C <dir> apply <p1>` (real, on the disposable checkout), then
+  `git -C <dir> apply --check <p2>`. This is the honest "does the series still
+  apply" test — patch 2 is checked against the tree it was authored against. No
+  marker is written; the next real build restores and re-applies both, so
+  `--check` never corrupts a later build. In CI the checkout is a fresh clone.
+
+SDL keyboard input in Crispy is **left untouched** — IPC is an *additional*
+event source.
 
 **Rationale.** Two focused diffs stay independently reviewable GPL
-corresponding-source artifacts; a single `git apply` of the series is atomic
-enough (it validates all hunks before touching the tree) and sidesteps the
-"patch 2 authored against pristine won't apply onto the patch-1 tree" and
-"per-patch `--check` against a pristine clone" failures a per-patch loop causes.
+corresponding-source artifacts. Restoring to the pinned commit before every
+apply makes the series idempotent and self-healing after a partial failure, and
+running patch 1 for real before `--check`ing patch 2 is the only accurate
+patch-rot signal for a dependent series.
 
 **Cost if wrong.** If the series ever fails to compose, concatenate the two into
 one `crispy-doom-prism.diff` and drop the tuple — a modest `build_crispy.py`
@@ -300,9 +318,10 @@ inputs with no stuck key and no orphan process?**
   authored against the patch-1 tree. Patch 2 connects to `DOOMED_PRISM_IPC_ADDR`,
   decodes frames, `D_PostEvent`s key and mouse events, and releases-all on EOF.
   SDL keyboard input is untouched.
-- `scripts/build_crispy.py`: an ordered `PATCHES` tuple, a single
-  `git apply <series>` and a single `git apply --check <series>`, the marker
-  written once after the series applies.
+- `scripts/build_crispy.py`: an ordered `PATCHES` tuple applied cumulatively
+  on disk after a `reset --hard <commit>` + `clean -fd` restore (`--check`
+  applies patch 1 for real then `--check`s patch 2); the marker written once
+  after the series applies (R4, §13).
 - The normalized action model and `ActionRouter` (held set, pulse, discrete,
   `release_all`), the sole owner of magnitude quantisation, draining to an
   injected sink that maps to IPC `Message` objects.
@@ -402,12 +421,12 @@ PewPew Engine process                              Crispy Doom process (patch se
 | `pewpew.input.fire` | Python | `FireArbiter(*, debounce_s=0.12)`: `deliberate_action()`, `spoken_fire()`, `poll(now) -> bool`, `reset()`. `DeliberateActionSource` / `SpokenFireSource` protocols; `NullSpokenFireSource`. Pure; time via `poll(now)` only. | — |
 | `pewpew.input.source` | Python | `InputSource` protocol: `sample(now) -> InputSample`. `InputSample(gaze_xy: tuple[int,int] | None, activation_edge: bool, pause_edge: bool, debug_fire_edge: bool)`. `PrismInputSource` stub. `DebugKeySpokenFireSource` (implements `SpokenFireSource`; only armed when `DOOMED_PRISM_DEBUG_FIRE` is set). | — |
 | `pewpew.input.simulator_source` | Python | `SimulatorInputSource(widget)`: a Qt event filter tracks mouse position, left-press edges, `Return`/`Enter` edges, and (env-gated) `F9` edges; `sample(now)` returns and clears the accumulated `InputSample`. `Leave` sets `gaze_xy = None`. | PySide6, `pewpew.input.source` |
-| `pewpew.input.pipeline` | Python | `InputPipeline(source, server, *, spoken_fire=NullSpokenFireSource())`: builds `GazeZoneMap`, `GazeFilter`, `FireArbiter`, `ActionRouter(sink=server.send)`. `tick(now)`, `release_all()`, `paused: bool`. The single integration unit. Time via `tick(now)`. | all of the above |
+| `pewpew.input.pipeline` | Python | `InputPipeline(source, server, *, spoken_fire=NullSpokenFireSource())`: builds `GazeZoneMap`, `GazeFilter`, `FireArbiter`, `ActionRouter(sink=server.send)`. `tick(now)`, `release_all()`, `toggle_pause()`, `paused: bool`. The single integration unit. Time via `tick(now)`. | all of the above |
 | `pewpew.engine` (modified) | Python | `start(*, ipc_address: str | None = None)` injects `DOOMED_PRISM_IPC_ADDR`; when `DOOMED_PRISM_WARP` is set, appends `-warp <value> -skill <DOOMED_PRISM_SKILL or 3>` to argv; `ipc_address` property. `stop()` does **not** touch the socket path (the server owns it). Mirrors the existing `frame_segment_name` env handling. | existing |
 | `pewpew.host_widget` (modified) | Python | `showEvent`: `IpcServer.start()`, `engine.start(ipc_address=…)`, build `InputPipeline`. `_on_tick`: **first** `server.poll()` + disconnect handling (before any early return), then, once past the M2 frame-wait, `pipeline.tick(now)`. `hideEvent` / child-disconnect / handshake-timeout wired per §12. `cleanup()` extended per R9. A `_PauseOverlay` child driven by `pipeline.paused`. | `pewpew.input.pipeline`, `pewpew.ipc.server` |
 | `src/i_ipc_input.c` / `.h` (patch 2) | C | `IPC_Input_Init()` (connect, blocking then non-blocking; no-op if `DOOMED_PRISM_IPC_ADDR` unset), `IPC_Input_Pump()` (decode frames → `D_PostEvent`; per-key `PULSE_HOLD_TICS` release scheduler; EOF → release held → stop), `IPC_Input_Shutdown()`. GPL-2.0-or-later header matching Crispy's style. | BSD sockets / winsock; `d_event.h` |
 | `src/d_loop.c`, `src/i_video.c` (patch 2) | C | ~8 lines: `IPC_Input_Init()` after `FB_Export_Init()`; `IPC_Input_Pump()` in `BuildNewTic()` once per built tic, immediately before `loop_interface->ProcessEvents()`; `IPC_Input_Shutdown()` before `FB_Export_Shutdown()`; extend the M2 signal handler to also call `IPC_Input_Shutdown()`. | the above |
-| `scripts/build_crispy.py` (modified) | Python | `PATCHES` tuple; single `git apply <series>` / `git apply --check <series>`; marker written once. | existing |
+| `scripts/build_crispy.py` (modified) | Python | `PATCHES` tuple; cumulative on-disk apply after a `reset --hard <commit>` + `clean -fd` restore; `--check` = restore + real `apply p1` + `apply --check p2`; marker written once (R4, §13). | existing |
 | `patches/crispy-doom-ipc-input.diff` | diff | The complete IPC-input modification, authored against the patch-1 tree. GPL-2.0-or-later. Adds only `src/i_ipc_input.c` / `.h` plus small hunks in `d_loop.c` / `i_video.c` / `src/CMakeLists.txt`. | — |
 | `scripts/ci_ipc_smoke.py` | Python | Build the patched engine, accept its IPC connection at a **fixed** CI socket path, handshake, stream a scripted action sequence, assert `frame_counter` keeps advancing, then clean teardown with no orphan and the socket removed. Prints only presence/absence + basename, never a resolved path. | `pewpew.ipc`, `pewpew.framebuffer` |
 
@@ -691,11 +710,15 @@ style; upstream notices in edited files preserved):
   implementation detail. (`TryRunTics()` does **not** satisfy it — it can build
   0, 1, or several tics per call.)
 - `IPC_Input_Shutdown();` immediately before `FB_Export_Shutdown();` in
-  `I_ShutdownGraphics`.
-- Extend patch 1's POSIX `fb_signal_handler` to also call
-  `IPC_Input_Shutdown()`. This is the one place patch 2 modifies a patch-1 line;
-  it is a single added call inside an existing function body, not a conflicting
-  edit of the same line.
+  `I_ShutdownGraphics` (the normal-exit path).
+- **No signal handling in patch 2.** On a SIGINT/SIGTERM stop the process dies
+  before `I_ShutdownGraphics` runs, but the kernel closes the client socket fd
+  as the process exits, so the server (PewPew) sees EOF, runs its own
+  `on_disconnect`, and unlinks the socket path it owns (§6, R3). Patch 1's
+  `fb_signal_handler` still unlinks the shared-memory segment. Patch 2 therefore
+  touches no patch-1 line — every patch-2 hunk is an addition in a region patch
+  1 introduced (`I_InitGraphics` / `I_ShutdownGraphics` bodies), a region patch
+  1 does not touch (`d_loop.c`), or a new file.
 
 **`src/CMakeLists.txt`:** add `i_ipc_input.c i_ipc_input.h` to the source list
 (a different line from patch 1's `i_framebuffer_export.*` insertion); `if(WIN32)
@@ -766,14 +789,23 @@ Menu / weapon / save navigation via input returns in 3b with the voice grammar.
 
 - `scripts/build_crispy.py` gains
   `PATCHES = ("patches/crispy-doom-fb-export.diff",
-  "patches/crispy-doom-ipc-input.diff")`. `plan_commands` emits **one**
-  `git -C <dir> apply <p1> <p2>` (real build) or **one**
-  `git -C <dir> apply --check <p1> <p2>` (under `--check`). `git apply`
-  validates every hunk of the whole series before modifying the tree. The
-  `.doomed-prism-applied` marker is written **once**, only after that single
-  apply command succeeds; a failed series leaves no marker and the next run
-  re-attempts the whole series. Tests: a series where the second patch fails →
-  no marker → re-attempt; `--check` emits the single combined invocation.
+  "patches/crispy-doom-ipc-input.diff")` and applies the series **cumulatively
+  on disk** (R4 — `git apply` does not compose multiple patch-file arguments):
+  - Real build, marker absent: `git -C <dir> reset --hard <lock.commit>` +
+    `git -C <dir> clean -fd`, then `git -C <dir> apply <p1>`, then
+    `git -C <dir> apply <p2>`, then write `.doomed-prism-applied` **once**. Any
+    step failing leaves no marker; the next run's `reset --hard` + `clean -fd`
+    restores pristine and re-attempts the whole series (self-healing after a
+    partial apply).
+  - `--check`: `reset --hard` + `clean -fd`, then `git -C <dir> apply <p1>`
+    (real), then `git -C <dir> apply --check <p2>`. No marker. The next real
+    build restores and re-applies both, so `--check` never corrupts a later
+    build.
+  - Tests: marker absent → restore + `apply p1` + `apply p2` + marker once;
+    `--check` → restore + `apply p1` + `apply --check p2`, no `cmake`, no
+    marker; a run left with p1 on disk and no marker → next run restores and
+    re-applies cleanly; the existing `git rev-parse HEAD == lock.commit` guard
+    still holds after the reset.
 - `crispy-doom.lock` unchanged.
 - `.github/workflows/ci.yml`: add `feature/doomed-prism-m3` to `on.push.branches`
   (a push to the M3 branch otherwise runs no CI; PRs still trigger).
@@ -905,9 +937,14 @@ a pre-connected `socketpair` injector.
   `gaze_xy`; `F9` sets `debug_fire_edge` only when `DOOMED_PRISM_DEBUG_FIRE` is
   set; edges are one-shot.
 - **`pewpew.engine`.** `start(ipc_address=…)` puts `DOOMED_PRISM_IPC_ADDR` in
-  the child env (a fake `popen_factory` captures `env=`); `DOOMED_PRISM_WARP`
-  set → argv gains `-warp 1 1 -skill 3`, unset → argv unchanged; `ipc_address`
-  property; `stop()` does **not** touch the socket path. Existing
+  the child env (a fake `popen_factory` captures `env=`); with
+  `DOOMED_PRISM_WARP="1 1"` set, argv gains `-warp 1 1 -skill 3` (and
+  `DOOMED_PRISM_SKILL` overrides the `3`); unset → argv byte-identical to M2;
+  `ipc_address` property; `stop()` does **not** touch the socket path. The
+  existing exact-argv assertion in
+  `test_start_launches_configured_windowed_engine_once_and_returns_its_pid` gains
+  `monkeypatch.delenv("DOOMED_PRISM_WARP", raising=False)` (and `DOOMED_PRISM_SKILL`)
+  so a developer with those exported does not see it fail; the
   `DOOMED_PRISM_FB_NAME` tests still pass.
 - **`pewpew.host_widget`** with `pytest-qt` and injected fakes: `showEvent`
   starts the server before the engine and passes the address; `_on_tick` calls
@@ -920,11 +957,15 @@ a pre-connected `socketpair` injector.
   and is idempotent; the handshake-timeout path raises `RuntimeError("engine did
   not connect input")` after cleanup and the version-mismatch path raises
   `RuntimeError("input protocol mismatch")` after cleanup.
-- **`scripts/build_crispy.py`.** `plan_commands` emits a **single** combined
-  `git apply` (and a single `git apply --check`) for the whole `PATCHES` tuple,
-  in order; the marker is written once, only after that command; a run where the
-  series apply fails writes no marker and the next run re-attempts. Existing
-  single-patch tests updated to the tuple.
+- **`scripts/build_crispy.py`.** `plan_commands` (marker absent) emits
+  `reset --hard <commit>` + `clean -fd` + `apply <p1>` + `apply <p2>`, in that
+  order, and the marker is written once after `apply <p2>` succeeds. Under
+  `--check` it emits `reset --hard` + `clean -fd` + `apply <p1>` +
+  `apply --check <p2>`, no `cmake`, no marker. Tests: the ordered command list
+  for each mode; a checkout left with p1 on disk and no marker → next run's
+  `reset --hard` restores and the series re-applies; the `HEAD == lock.commit`
+  guard still passes after the reset. Existing single-patch tests updated to the
+  tuple.
 - **`tests/test_distribution_metadata.py`.** Expectations updated for the new
   modules, the new patch, and `scripts/ci_ipc_smoke.py`.
 - **`tests/test_validation_docs_m3.py`** (new, mirroring
@@ -957,8 +998,10 @@ R11, §5), and per-task **Files** / **Interfaces** / failing-test-first
    `BuildNewTic()` pump hook, the `PULSE_HOLD_TICS` scheduler, `CMakeLists.txt`,
    authored against the patch-1 tree; verified by a manual local build of the
    series.
-4. `scripts/build_crispy.py` — `PATCHES` tuple, single combined apply /
-   `--check`, marker-once semantics; `tests/test_build_crispy.py` updates.
+4. `scripts/build_crispy.py` — `PATCHES` tuple, cumulative on-disk apply with a
+   `reset --hard <commit>` + `clean -fd` restore before every attempt,
+   `--check` = restore + real `apply p1` + `apply --check p2`, marker written
+   once after `apply p2` (R4, §13); `tests/test_build_crispy.py` updates.
    *(A clean split point: tasks 1–4 are the transport core, R1 note.)*
 5. `pewpew.input.actions` — `Action` (values = §5 table), `HeldAction`,
    `ActionRouter` (sole quantiser); `tests/test_input_actions.py`.
@@ -1028,8 +1071,9 @@ Enter-pause — with Crispy's SDL window unfocused the entire time, and does eve
 lifecycle transition release all held inputs with no stuck key and no orphan?
 
 **Environment and launch.** `python scripts/build_crispy.py` builds the patched
-engine from the series; `--check` passes for the series; record the pinned tag
-and commit, compiler, and SDL2 versions. Record `git apply --stat
+engine from the series; `python scripts/build_crispy.py --check` passes (restore
++ real `apply p1` + `apply --check p2`); record the pinned tag and commit,
+compiler, and SDL2 versions. Record `git apply --stat
 patches/crispy-doom-ipc-input.diff` and confirm it adds only
 `src/i_ipc_input.c` / `.h` plus small hunks in `d_loop.c` / `i_video.c` /
 `src/CMakeLists.txt`, within the stated line ceiling. `doomed-prism validate`
