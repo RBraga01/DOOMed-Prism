@@ -47,10 +47,10 @@ index 8b7fb8f6..eea331ee 100644
      add_executable("${PROGRAM_PREFIX}doom" WIN32 ${SOURCE_FILES_WITH_DEH} "${CMAKE_CURRENT_BINARY_DIR}/doom-res.rc")
 diff --git a/src/i_framebuffer_export.c b/src/i_framebuffer_export.c
 new file mode 100644
-index 00000000..f9356f55
+index 00000000..f6d4934b
 --- /dev/null
 +++ b/src/i_framebuffer_export.c
-@@ -0,0 +1,165 @@
+@@ -0,0 +1,171 @@
 +//
 +// Copyright(C) 2026 DOOMed Prism contributors
 +//
@@ -82,7 +82,6 @@ index 00000000..f9356f55
 +// height is resampled.
 +//
 +
-+#include <assert.h>
 +#include <stdatomic.h>
 +#include <stdint.h>
 +#include <stdlib.h>
@@ -111,6 +110,7 @@ index 00000000..f9356f55
 +
 +static int fb_enabled = 0;
 +static const char *fb_name = NULL;
++static char fb_name_buf[256];
 +static unsigned char *fb_base = NULL;
 +static uint32_t fb_active = 0;
 +static uint32_t fb_counter = 0;
@@ -131,8 +131,11 @@ index 00000000..f9356f55
 +
 +void FB_Export_Init(void)
 +{
-+    fb_name = getenv("DOOMED_PRISM_FB_NAME");
-+    if (fb_name == NULL || fb_name[0] == '\0') { fb_enabled = 0; return; }
++    const char *env = getenv("DOOMED_PRISM_FB_NAME");
++    if (env == NULL || env[0] == '\0') { fb_enabled = 0; return; }
++    strncpy(fb_name_buf, env, sizeof(fb_name_buf) - 1);
++    fb_name_buf[sizeof(fb_name_buf) - 1] = '\0';
++    fb_name = fb_name_buf;
 +
 +#ifdef _WIN32
 +    fb_handle = CreateFileMappingA(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE,
@@ -140,7 +143,7 @@ index 00000000..f9356f55
 +    if (fb_handle == NULL) { fb_enabled = 0; return; }
 +    fb_base = (unsigned char *) MapViewOfFile(fb_handle, FILE_MAP_ALL_ACCESS,
 +                                              0, 0, FB_SEGMENT_SIZE);
-+    if (fb_base == NULL) { fb_enabled = 0; return; }
++    if (fb_base == NULL) { CloseHandle(fb_handle); fb_enabled = 0; return; }
 +#else
 +    shm_unlink(fb_name);
 +    fb_fd = shm_open(fb_name, O_CREAT | O_RDWR, 0600);
@@ -163,8 +166,11 @@ index 00000000..f9356f55
 +void FB_Export_Publish(SDL_Surface *argb)
 +{
 +    if (!fb_enabled) { return; }
-+    assert(argb->w == FB_WIDTH);
-+    assert(argb->format->format == SDL_PIXELFORMAT_ARGB8888);
++    if (argb->w != FB_WIDTH || argb->pitch < FB_STRIDE
++        || argb->format->format != FB_PIXFMT_ARGB8888)
++    {
++        return;
++    }
 +
 +    uint32_t next = (fb_active + 1u) % FB_SLOT_COUNT;
 +    unsigned char *dst = fb_base + FB_HEADER_SIZE + next * FB_SLOT_BYTES;
@@ -246,7 +252,7 @@ index 00000000..ea3ac100
 +
 +#endif
 diff --git a/src/i_video.c b/src/i_video.c
-index 60ffb438..199b80bc 100644
+index 60ffb438..bee58414 100644
 --- a/src/i_video.c
 +++ b/src/i_video.c
 @@ -36,6 +36,7 @@
@@ -284,7 +290,7 @@ index 60ffb438..199b80bc 100644
  #endif
  
      // Make sure the pillarboxes are kept clear each frame.
-@@ -1791,7 +1803,19 @@ void I_InitGraphics(void)
+@@ -1791,7 +1803,20 @@ void I_InitGraphics(void)
  #endif
      char *env;
  
@@ -295,7 +301,8 @@ index 60ffb438..199b80bc 100644
 +    // must be forced off so SCREENWIDTH is always exactly 640 regardless
 +    // of monitor aspect ratio). This must happen before I_GetScreenDimensions()
 +    // below computes SCREENWIDTH/SCREENHEIGHT and the surfaces are sized.
-+    if (getenv("DOOMED_PRISM_FB_NAME") != NULL)
++    if (getenv("DOOMED_PRISM_FB_NAME") != NULL
++        && getenv("DOOMED_PRISM_FB_NAME")[0] != '\0')
 +    {
 +        crispy->hires = 1;
 +        crispy->widescreen = 0;
@@ -305,7 +312,7 @@ index 60ffb438..199b80bc 100644
      // SDL_WINDOWID, to embed the SDL window into the Xscreensaver
      // window.
  
-@@ -1895,6 +1919,11 @@ void I_InitGraphics(void)
+@@ -1895,6 +1920,11 @@ void I_InitGraphics(void)
  
      initialized = true;
  
