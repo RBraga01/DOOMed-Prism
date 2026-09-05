@@ -25,7 +25,8 @@ are visible and updating inside the Raven Simulator.
   clean teardown that leaves no `/dev/shm` segment behind.
 - The Crispy Doom pin in `crispy-doom.lock` is now actually enforced, not just
   recorded.
-- The Python test suite is **103 passing**.
+- The Python test suite is **103 passed, 5 skipped** (the skips are POSIX‑only
+  tests that do not run on Windows).
 
 **Not yet validated:** ARM64, and real Raven Prism hardware. The simulator is an
 optical preview, not the device.
@@ -190,7 +191,7 @@ python scripts/check_publication_safety.py --root . --history
 ## License
 
 Original DOOMed Prism / PewPew Engine code is licensed under GPL-2.0-or-later.
-Crispy Doom and the frame‑export patch fall under Crispy Doom's own GPL-2.0
-terms; this repository ships only the patch and a pinned reference, never
-upstream engine source. Source distributions include the canonical GPL-2.0 text
-and deliberately exclude the test suite, whose dependencies are development‑only.
+Crispy Doom is covered by its own upstream license; this repository contains
+only the frame‑export patch and a pinned reference to Crispy Doom, never its
+source. Source distributions include the canonical GPL-2.0 text and deliberately
+exclude the test suite, whose dependencies are development‑only.
