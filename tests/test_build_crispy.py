@@ -92,7 +92,10 @@ def test_plan_commands_clones_pinned_tag_applies_patch_then_builds(
     patch = tmp_path / "patches" / "crispy-doom-fb-export.diff"
 
     commands = build_crispy.plan_commands(
-        lock, build_dir=build_dir, patch=patch, check_only=False
+        lock,
+        build_dir=build_dir,
+        patches=(patch, tmp_path / "p2.diff"),
+        check_only=False,
     )
 
     joined = [" ".join(c) for c in commands]
@@ -106,7 +109,7 @@ def test_plan_commands_check_only_stops_after_git_apply_check(tmp_path: Path) ->
     commands = build_crispy.plan_commands(
         lock,
         build_dir=tmp_path / "b",
-        patch=tmp_path / "p.diff",
+        patches=(tmp_path / "p.diff", tmp_path / "p2.diff"),
         check_only=True,
     )
     joined = [" ".join(c) for c in commands]
@@ -125,7 +128,7 @@ def test_clean_removes_the_build_directory(tmp_path: Path) -> None:
         runner=lambda cmd, **_: calls.append(cmd),
         _build_dir=build_dir,
         _lock_path=_write_lock(tmp_path),
-        _patch=tmp_path / "p.diff",
+        _patches=(tmp_path / "p1.diff", tmp_path / "p2.diff"),
     )
 
     assert exit_code == 0
@@ -145,7 +148,7 @@ def test_run_skips_git_apply_when_marker_present(tmp_path: Path) -> None:
         fetch=_fake_fetch(),
         _build_dir=build_dir,
         _lock_path=_write_lock(tmp_path),
-        _patch=tmp_path / "p.diff",
+        _patches=(tmp_path / "p1.diff", tmp_path / "p2.diff"),
     )
 
     joined = [" ".join(c) for c in calls]
@@ -195,7 +198,7 @@ def test_run_happy_path_verifies_commit_then_applies_and_builds(
         fetch=_fake_fetch(),
         _build_dir=build_dir,
         _lock_path=_write_lock(tmp_path),
-        _patch=tmp_path / "p.diff",
+        _patches=(tmp_path / "p1.diff", tmp_path / "p2.diff"),
     )
     assert exit_code == 0
     joined = [" ".join(c) for c in calls]
@@ -214,7 +217,7 @@ def test_run_aborts_on_commit_mismatch_before_apply_or_cmake(tmp_path: Path) -> 
         fetch=_fake_fetch(),
         _build_dir=build_dir,
         _lock_path=_write_lock(tmp_path),
-        _patch=tmp_path / "p.diff",
+        _patches=(tmp_path / "p1.diff", tmp_path / "p2.diff"),
     )
     assert exit_code != 0
     joined = [" ".join(c) for c in calls]
@@ -232,7 +235,7 @@ def test_check_verifies_commit_before_git_apply_check(tmp_path: Path) -> None:
         fetch=_fake_fetch(),
         _build_dir=build_dir,
         _lock_path=_write_lock(tmp_path),
-        _patch=tmp_path / "p.diff",
+        _patches=(tmp_path / "p1.diff", tmp_path / "p2.diff"),
     )
     assert exit_code != 0
     joined = [" ".join(c) for c in calls]
@@ -282,7 +285,7 @@ def test_run_happy_path_downloads_and_verifies_tarball(tmp_path: Path) -> None:
         fetch=_fetch,
         _build_dir=build_dir,
         _lock_path=_write_lock(tmp_path),
-        _patch=tmp_path / "p.diff",
+        _patches=(tmp_path / "p1.diff", tmp_path / "p2.diff"),
     )
     assert exit_code == 0
     assert fetched and fetched[0].endswith("crispy-doom-7.1.tar.gz")
@@ -297,7 +300,7 @@ def test_run_aborts_on_tarball_mismatch(tmp_path: Path) -> None:
         fetch=_fake_fetch(b"tampered"),
         _build_dir=build_dir,
         _lock_path=_write_lock(tmp_path),
-        _patch=tmp_path / "p.diff",
+        _patches=(tmp_path / "p1.diff", tmp_path / "p2.diff"),
     )
     assert exit_code != 0
     joined = [" ".join(c) for c in calls]
@@ -317,7 +320,7 @@ def test_offline_skips_tarball_download_but_still_verifies_commit(
         fetch=lambda url: fetched.append(url) or b"",
         _build_dir=build_dir,
         _lock_path=_write_lock(tmp_path),
-        _patch=tmp_path / "p.diff",
+        _patches=(tmp_path / "p1.diff", tmp_path / "p2.diff"),
     )
     assert exit_code == 0
     assert fetched == []  # no download attempted
@@ -333,9 +336,92 @@ def test_offline_still_aborts_on_commit_mismatch(tmp_path: Path) -> None:
         fetch=lambda url: b"",
         _build_dir=build_dir,
         _lock_path=_write_lock(tmp_path),
-        _patch=tmp_path / "p.diff",
+        _patches=(tmp_path / "p1.diff", tmp_path / "p2.diff"),
     )
     assert exit_code != 0
+
+
+# --------------------------------------------------------------------------- #
+# multi-patch series
+# --------------------------------------------------------------------------- #
+
+
+def test_plan_commands_restores_then_applies_every_patch_in_order(tmp_path: Path) -> None:
+    lock = build_crispy.load_lock(_write_lock(tmp_path))
+    build_dir = tmp_path / "build" / "crispy"
+    (build_dir / ".git").mkdir(parents=True)
+    patches = (tmp_path / "p1.diff", tmp_path / "p2.diff")
+
+    commands = build_crispy.plan_commands(
+        lock, build_dir=build_dir, patches=patches, check_only=False
+    )
+    joined = [" ".join(c) for c in commands]
+
+    assert joined[0] == f"git -C {build_dir} reset --hard {lock.commit}"
+    assert joined[1] == f"git -C {build_dir} clean -fd -- src/"
+    applies = [c for c in joined if " apply " in c]
+    assert applies[0].endswith(f"apply {patches[0]}")
+    assert applies[1].endswith(f"apply {patches[1]}")
+    assert "--check" not in " ".join(applies)
+    assert any("cmake" in c and "--build" in c for c in joined)
+
+
+def test_plan_commands_check_only_applies_p1_for_real_then_checks_the_rest(
+    tmp_path: Path,
+) -> None:
+    lock = build_crispy.load_lock(_write_lock(tmp_path))
+    build_dir = tmp_path / "b"
+    (build_dir / ".git").mkdir(parents=True)
+    patches = (tmp_path / "p1.diff", tmp_path / "p2.diff")
+    joined = [
+        " ".join(c)
+        for c in build_crispy.plan_commands(
+            lock, build_dir=build_dir, patches=patches, check_only=True
+        )
+    ]
+    assert any(c.endswith(f"apply {patches[0]}") and "--check" not in c for c in joined)
+    assert any(c.endswith(f"apply --check {patches[1]}") for c in joined)
+    assert not any("cmake" in c for c in joined)
+
+
+def test_run_writes_the_marker_only_after_the_last_patch_applies(tmp_path: Path) -> None:
+    build_dir = tmp_path / "build" / "crispy"
+    (build_dir / ".git").mkdir(parents=True)
+    p1, p2 = tmp_path / "p1.diff", tmp_path / "p2.diff"
+    calls: list[list[str]] = []
+
+    # _make_runner already answers `git rev-parse HEAD`; fail only the real `apply p2`.
+    exit_code = build_crispy.run(
+        [],
+        runner=_make_runner(calls, head=_COMMIT, fail_cmd_substr=f"apply {p2}"),
+        fetch=_fake_fetch(),
+        _build_dir=build_dir,
+        _lock_path=_write_lock(tmp_path),
+        _patches=(p1, p2),
+    )
+    assert exit_code == 1
+    assert not (build_dir / build_crispy._MARKER).exists()
+
+
+def test_run_writes_the_marker_once_when_the_series_applies(tmp_path: Path) -> None:
+    build_dir = tmp_path / "build" / "crispy"
+    (build_dir / ".git").mkdir(parents=True)
+    p1, p2 = tmp_path / "p1.diff", tmp_path / "p2.diff"
+    calls: list[list[str]] = []
+
+    exit_code = build_crispy.run(
+        [],
+        runner=_make_runner(calls, head=_COMMIT),
+        fetch=_fake_fetch(),
+        _build_dir=build_dir,
+        _lock_path=_write_lock(tmp_path),
+        _patches=(p1, p2),
+    )
+    assert exit_code == 0
+    assert (build_dir / build_crispy._MARKER).read_text(encoding="utf-8") == "1"
+    joined = [" ".join(c) for c in calls]
+    assert any(c.endswith("reset --hard " + _COMMIT) for c in joined)
+    assert any(c.endswith("clean -fd -- src/") for c in joined)
 
 
 def _ok():
