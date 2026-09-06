@@ -15,8 +15,11 @@ not a native SDL window.*
 
 ## Current status
 
-**Milestone 2 is complete: framebuffer integration is viable.** Real DOOM frames
-are visible and updating inside the Raven Simulator.
+**Milestone 3a is implemented on `feature/doomed-prism-m3`; its decision gate is
+pending.** The input core and the local‑IPC boundary — normalized gaze/fire
+actions streamed to the patched engine over a per‑run socket — are in place on
+top of a complete Milestone 2: real DOOM frames are visible and updating inside
+the Raven Simulator.
 
 - Validated on Windows 11 in **Raw, Night, Day, Outdoors and Camera** modes —
   live, updating pixels composited by the real Raven Simulator compositor.
@@ -26,10 +29,8 @@ are visible and updating inside the Raven Simulator.
   clean teardown that leaves no `/dev/shm` segment behind.
 - The Crispy Doom pin in `crispy-doom.lock` is now actually enforced, not just
   recorded.
-- The Python test suite is **103 passed, 5 skipped** (the skips are POSIX‑only
-  tests that do not run on Windows).
-- Milestone 3a (hands‑free input over a local IPC socket) is in progress on
-  `feature/doomed-prism-m3`.
+- The Python test suite is green (the only skips are POSIX‑only tests that do
+  not run on Windows).
 
 **Not yet validated:** ARM64, and real Raven Prism hardware. The simulator is an
 optical preview, not the device.
