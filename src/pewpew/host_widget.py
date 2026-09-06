@@ -9,10 +9,11 @@ from typing import Protocol
 from pewpew.config import RuntimeConfig
 from pewpew.engine import DoomProcess
 from pewpew.framebuffer import Frame, FrameReader, FrameSegmentError
+from pewpew.ipc.protocol import IPC_HANDSHAKE_TIMEOUT_S
 
 
 class _Engine(Protocol):
-    def start(self) -> int: ...
+    def start(self, *, ipc_address: str | None = None) -> int: ...
 
     def stop(self) -> None: ...
 
@@ -36,6 +37,10 @@ try:  # Keep non-desktop commands importable without the optional Qt dependency.
     from PySide6.QtCore import Qt, QTimer
     from PySide6.QtGui import QCloseEvent, QHideEvent, QImage, QPainter, QShowEvent
     from PySide6.QtWidgets import QApplication, QWidget
+
+    from pewpew.input.pipeline import InputPipeline
+    from pewpew.input.simulator_source import SimulatorInputSource
+    from pewpew.ipc.server import IpcServer
 except ImportError as _qt_import_error:  # pragma: no cover - depends on local extras
 
     class DoomHostWidget:
@@ -95,6 +100,8 @@ else:
             frame_reader: _Reader | None = None,
             frame_reader_factory: Callable[[str], _Reader] = FrameReader,
             clock: Callable[[], float] = time.monotonic,
+            ipc_server: "IpcServer | None" = None,
+            input_pipeline: "InputPipeline | None" = None,
         ) -> None:
             super().__init__()
             self._config = config
@@ -107,6 +114,11 @@ else:
             self._deadline = 0.0
             self._last_counter: int | None = None
             self._seen_frame = False
+            self._injected_server = ipc_server
+            self._injected_pipeline = input_pipeline
+            self._server: "IpcServer | None" = None
+            self._pipeline: "InputPipeline | None" = None
+            self._ipc_deadline: float = 0.0
 
             self.setFixedSize(self._HOST_WIDTH, self._HOST_HEIGHT)
             self.setAutoFillBackground(False)
@@ -138,12 +150,20 @@ else:
                 return
             self._started = True
             try:
-                self._engine.start()
+                now = self._clock()
+                self._deadline = now + self._SEGMENT_OPEN_TIMEOUT_S
+                self._ipc_deadline = now + IPC_HANDSHAKE_TIMEOUT_S
+                self._server = self._injected_server or IpcServer()
+                self._server.on_disconnect = self._on_ipc_disconnect
+                addr = self._server.start()
+                self._engine.start(ipc_address=addr)
                 if self._reader is None:
                     name = self._engine.frame_segment_name
                     self._reader = self._reader_factory(name)
                     self.viewport.set_reader(self._reader)
-                self._deadline = self._clock() + self._SEGMENT_OPEN_TIMEOUT_S
+                self._pipeline = self._injected_pipeline or InputPipeline(
+                    SimulatorInputSource(self.viewport), self._server.send
+                )
                 self._timer.start()
             except BaseException:
                 self._cleanup_after_startup_failure()
@@ -158,6 +178,11 @@ else:
             event.accept()
 
         def _on_tick(self) -> None:
+            if self._server is not None:
+                self._server.poll()
+            if self._server is not None and self._server.protocol_mismatch:
+                self._cleanup_after_startup_failure()
+                raise RuntimeError("input protocol mismatch")
             reader = self._reader
             if reader is None:
                 return
@@ -180,12 +205,28 @@ else:
                     self._cleanup_after_startup_failure()
                     raise RuntimeError("engine did not export frames")
                 return
+            if self._pipeline is not None:
+                self._pipeline.tick(self._clock())
+            if (
+                self._server is not None
+                and not self._server.is_connected
+                and self._seen_frame
+                and self._clock() > self._ipc_deadline
+            ):
+                self._cleanup_after_startup_failure()
+                raise RuntimeError("engine did not connect input")
             counter = frame.counter if frame is not None else None
             if counter != self._last_counter:
                 self._last_counter = counter
                 self.viewport.update()
             if self._engine.poll() is not None:
                 self._timer.stop()
+
+        def _on_ipc_disconnect(self) -> None:
+            if self._pipeline is not None:
+                self._pipeline.release_all()
+            if self._server is not None:
+                self._server.close()
 
         def cleanup(self) -> None:
             self._shutdown_requested = True

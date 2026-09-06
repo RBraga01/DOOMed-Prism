@@ -31,8 +31,9 @@ class _Engine:
         self._return: int | None = None
         self.frame_segment_name = "doomed-prism-fb-test-0"
 
-    def start(self) -> int:
+    def start(self, *, ipc_address: str | None = None) -> int:
         self.start_calls += 1
+        self.ipc_arg = ipc_address
         return 8128
 
     def stop(self) -> None:
@@ -231,3 +232,110 @@ def test_about_to_quit_and_close_event_both_run_cleanup(qtbot) -> None:
     host2 = _host(qtbot, engine=engine2)
     host2.close()
     assert engine2.stop_calls == 1
+
+
+class _Server:
+    def __init__(self) -> None:
+        self.started = False
+        self.closed = 0
+        self.sent: list = []
+        self.is_connected = False
+        self.protocol_mismatch = False
+        self.on_disconnect = lambda: None
+        self.poll_calls = 0
+
+    def start(self) -> str:
+        self.started = True
+        return "127.0.0.1:0"
+
+    def poll(self) -> None:
+        self.poll_calls += 1
+
+    def send(self, message) -> None:
+        self.sent.append(message)
+
+    def close(self) -> None:
+        self.closed += 1
+
+
+class _Pipeline:
+    def __init__(self) -> None:
+        self.ticks = 0
+        self.releases = 0
+        self.paused = False
+
+    def tick(self, now: float) -> None:
+        self.ticks += 1
+
+    def release_all(self) -> None:
+        self.releases += 1
+        self.paused = False
+
+    def toggle_pause(self) -> None:
+        self.paused = not self.paused
+
+
+def _ipc_host(qtbot, *, engine=None, reader=None, server=None, pipeline=None):
+    engine = engine or _Engine()
+    engine.start = lambda *, ipc_address=None: setattr(engine, "ipc_arg", ipc_address) or 8128
+    reader = reader or _Reader()
+    server = server or _Server()
+    pipeline = pipeline or _Pipeline()
+    config = SimpleNamespace(viewport_width=640, viewport_height=480)
+    host = DoomHostWidget(
+        config, engine=engine, frame_reader=reader,
+        ipc_server=server, input_pipeline=pipeline,
+    )
+    qtbot.addWidget(host)
+    return host, engine, reader, server, pipeline
+
+
+def test_showevent_starts_server_before_engine_and_passes_the_address(qtbot) -> None:
+    order: list[str] = []
+    host, engine, _, server, _ = _ipc_host(qtbot)
+    server.start = lambda: order.append("server") or "127.0.0.1:0"
+    engine.start = lambda *, ipc_address=None: order.append(f"engine:{ipc_address}") or 8128
+    host.show()
+    assert order == ["server", "engine:127.0.0.1:0"]
+
+
+def test_on_tick_polls_the_server_before_any_early_return(qtbot) -> None:
+    reader = _Reader()
+    reader.available = False  # forces the "waiting for segment" early return
+    host, _, _, server, _ = _ipc_host(qtbot, reader=reader)
+    host.show()
+    host._on_tick()
+    assert server.poll_calls >= 1
+
+
+def test_ipc_disconnect_releases_all_and_closes_without_pause(qtbot) -> None:
+    host, _, _, server, pipeline = _ipc_host(qtbot)
+    host.show()
+    host._on_ipc_disconnect()
+    assert server.closed == 1
+    assert pipeline.releases == 1
+    assert not any(getattr(m, "code", None) == 20 for m in server.sent)
+
+
+def test_protocol_mismatch_raises_after_cleanup(qtbot) -> None:
+    # No frame is set: the mismatch check runs before the M2 frame-wait guard.
+    host, engine, _, server, _ = _ipc_host(qtbot)
+    server.protocol_mismatch = True
+    host.show()
+    with pytest.raises(RuntimeError, match="input protocol mismatch"):
+        host._on_tick()
+    assert engine.stop_calls == 1
+
+
+def test_no_ipc_connection_past_deadline_raises(qtbot) -> None:
+    reader = _Reader()
+    now = [0.0]  # showEvent arms both deadlines from now[0]; the tick reads a later value
+    host, engine, _, server, _ = _ipc_host(qtbot, reader=reader)
+    host._clock = lambda: now[0]  # type: ignore[assignment]
+    host.show()                    # _deadline = 10.0, _ipc_deadline = 10.0
+    reader.try_open()
+    reader.set_frame(counter=1, byte=0x20)  # frames flowing, but IPC never connects
+    now[0] = 100.0                 # well past _ipc_deadline
+    with pytest.raises(RuntimeError, match="engine did not connect input"):
+        host._on_tick()
+    assert engine.stop_calls == 1
