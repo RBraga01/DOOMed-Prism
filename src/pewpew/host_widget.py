@@ -37,13 +37,12 @@ try:  # Keep non-desktop commands importable without the optional Qt dependency.
     from PySide6.QtCore import Qt, QTimer
     from PySide6.QtGui import (
         QCloseEvent,
-        QColor,
         QHideEvent,
         QImage,
         QPainter,
         QShowEvent,
     )
-    from PySide6.QtWidgets import QApplication, QWidget
+    from PySide6.QtWidgets import QApplication, QLabel, QWidget
 
     from pewpew.input.pipeline import InputPipeline
     from pewpew.input.simulator_source import SimulatorInputSource
@@ -91,41 +90,31 @@ else:
             painter.drawImage(self.rect(), image)
             painter.end()
 
-    class _PauseOverlay(QWidget):
-        """A translucent child that shows PAUSED over the viewport while input is held."""
+    class _PauseOverlay(QLabel):
+        """A translucent child that shows PAUSED over the viewport while input is held.
 
-        _EMITTED_LIGHT = QColor(0x66, 0xFF, 0x99, 0xFF)
-        _SCRIM = QColor(0x00, 0x00, 0x00, 0x99)
+        A style-sheeted QLabel, not a custom-paintEvent widget: alpha-blending a
+        fillRect against a child widget's own backing store segfaults under a
+        headless xvfb server (PySide6 6.11). Qt renders a QLabel's background and
+        text through the style system, which is headless-safe.
+        """
+
+        _STYLE = (
+            "background-color: rgba(0, 0, 0, 153);"
+            "color: rgb(102, 255, 153);"
+            "font-size: 48px;"
+            "font-weight: bold;"
+        )
 
         def __init__(self, parent: QWidget) -> None:
-            super().__init__(parent)
+            super().__init__("PAUSED", parent)
             self.setObjectName("pause_overlay")
-            self.setAttribute(Qt.WA_NoSystemBackground, True)
             self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+            self.setAttribute(Qt.WA_StyledBackground, True)
+            self.setAlignment(Qt.AlignCenter)
+            self.setStyleSheet(self._STYLE)
             self.setGeometry(parent.viewport.geometry())
             self.setVisible(False)
-
-        def paintEvent(self, event: object) -> None:
-            del event
-            if self.rect().isEmpty():
-                return
-            # Use begin()/isActive() rather than the QPainter(self) constructor:
-            # under a headless xvfb backing store the constructor can hand back an
-            # inactive painter whose fillRect() then segfaults on PySide6 6.11.
-            # begin() returns False on a not-ready paint device so we bail cleanly.
-            painter = QPainter()
-            if not painter.begin(self):
-                return
-            try:
-                painter.fillRect(self.rect(), self._SCRIM)
-                font = painter.font()
-                font.setPointSize(48)
-                font.setBold(True)
-                painter.setFont(font)
-                painter.setPen(self._EMITTED_LIGHT)
-                painter.drawText(self.rect(), Qt.AlignCenter, "PAUSED")
-            finally:
-                painter.end()
 
     class DoomHostWidget(QWidget):
         """A transparent 640x640 surface painting Doom frames into its viewport."""
