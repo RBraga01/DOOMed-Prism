@@ -22,7 +22,7 @@ index eea331ee..c942c26a 100644
  if(WIN32)
      add_executable("${PROGRAM_PREFIX}doom" WIN32 ${SOURCE_FILES_WITH_DEH} "${CMAKE_CURRENT_BINARY_DIR}/doom-res.rc")
 diff --git a/src/d_loop.c b/src/d_loop.c
-index 8419a9bb..fa9171fe 100644
+index 8419a9bb..90e764f2 100644
 --- a/src/d_loop.c
 +++ b/src/d_loop.c
 @@ -23,6 +23,7 @@
@@ -33,36 +33,42 @@ index 8419a9bb..fa9171fe 100644
  #include "i_system.h"
  #include "i_timer.h"
  #include "i_video.h"
-@@ -150,6 +151,11 @@ static boolean BuildNewTic(void)
-     I_StartTic ();
-     loop_interface->ProcessEvents();
+@@ -148,6 +149,14 @@ static boolean BuildNewTic(void)
+     gameticdiv = gametic/ticdup;
  
-+    // DOOMed Prism: inject queued IPC input events exactly once per built
-+    // tic, after SDL events are drained (I_StartTic / ProcessEvents) and
-+    // before loop_interface->BuildTiccmd() consumes the event queue below.
+     I_StartTic ();
++
++    // DOOMed Prism: post queued IPC input events into events[] *before*
++    // loop_interface->ProcessEvents() dispatches the ring to G_/M_Responder,
++    // so an injected turn/keypress reaches gamekeydown[]/mousex in the same
++    // tic G_BuildTiccmd() consumes below (posting after ProcessEvents cost a
++    // uniform +1 game-tic of input latency).
 +    IPC_Input_Pump();
 +
-     // Always run the menu
+     loop_interface->ProcessEvents();
  
-     loop_interface->RunMenu();
+     // Always run the menu
 diff --git a/src/i_ipc_input.c b/src/i_ipc_input.c
 new file mode 100644
-index 00000000..bf8ee610
+index 00000000..a07c1002
 --- /dev/null
 +++ b/src/i_ipc_input.c
-@@ -0,0 +1,310 @@
+@@ -0,0 +1,323 @@
 +//
 +// Copyright(C) 2026 DOOMed Prism contributors
 +// GPL-2.0-or-later — see i_ipc_input.h.
 +//
-+// Call-site binding (spec §10 once-per-built-tic invariant): IPC_Input_Pump()
-+// is called from d_loop.c BuildNewTic() (crispy-doom-7.1 d_loop.c, static
-+// boolean BuildNewTic(void) at line 143), immediately after
-+// loop_interface->ProcessEvents() (line 151) and before
-+// loop_interface->BuildTiccmd() (line 185). BuildNewTic() runs exactly once
-+// per tic actually built, so SDL events are fully drained and the IPC-posted
-+// events are visible to G_BuildTiccmd for the same tic. NetUpdate() was
-+// rejected because it can build zero or several tics per call.
++// Call-site binding: IPC_Input_Pump() is called from d_loop.c BuildNewTic()
++// (crispy-doom-7.1 d_loop.c, static boolean BuildNewTic(void)) between
++// I_StartTic() and loop_interface->ProcessEvents(), so the IPC events it
++// posts with D_PostEvent() sit in events[] alongside the freshly polled SDL
++// events and are dispatched to G_Responder/M_Responder by that same
++// ProcessEvents() call -- updating gamekeydown[]/mousex before
++// loop_interface->BuildTiccmd() reads them, in the same tic. NetUpdate() was
++// rejected because it can build zero or several tics per call. BuildNewTic()
++// itself can also return false at the maketic throttle before BuildTiccmd(),
++// so PULSE_HOLD_TICS counts pump calls (one per BuildNewTic() call), not tics
++// actually built -- close enough for the 2-tic fire/use hold.
 +//
 +
 +#include <errno.h>
@@ -301,9 +307,19 @@ index 00000000..bf8ee610
 +            key = (code == AC_FIRE) ? key_fire : (code == AC_USE) ? key_use : -1;
 +            if (key < 0) break;
 +            ipc_post_key(ev_keydown, key);
++            // Refresh an existing same-key hold rather than allocating a new
++            // slot; only take a free slot when this key has none. Guarantees
++            // every keydown gets a paired keyup even when many PULSE frames
++            // drain in one pump (with just key_fire/key_use the array of 4
++            // can never exhaust).
++            slot = -1;
 +            for (i = 0; i < 4; i++)
-+                if (pulse_tics[i] == 0)
-+                { pulse_key[i] = key; pulse_tics[i] = PULSE_HOLD_TICS; break; }
++                if (pulse_tics[i] > 0 && pulse_key[i] == key) { slot = i; break; }
++            if (slot < 0)
++                for (i = 0; i < 4; i++)
++                    if (pulse_tics[i] == 0) { slot = i; break; }
++            if (slot >= 0)
++            { pulse_key[slot] = key; pulse_tics[slot] = PULSE_HOLD_TICS; }
 +            break;
 +        case MT_DISCRETE:
 +            if (code == AC_PAUSE)
