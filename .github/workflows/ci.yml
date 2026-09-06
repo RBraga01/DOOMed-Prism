@@ -6,6 +6,7 @@ on:
     branches:
       - feature/doomed-prism-m1
       - feature/doomed-prism-m2
+      - feature/doomed-prism-m3
       - main
 
 concurrency:
@@ -113,6 +114,18 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
           echo "::notice title=POSIX runtime validation::shm_open path exercised on Linux x86_64 (segment + advancing frame_counter + clean teardown)"
+
+      - name: IPC runtime smoke test
+        run: |
+          set -o pipefail
+          xvfb-run -a python scripts/ci_ipc_smoke.py \
+            "${{ steps.build.outputs.exe }}" \
+            /usr/share/games/doom/freedoom1.wad | tee ipc-smoke.log
+          {
+            echo "### IPC runtime validation"
+            echo ""
+            echo ":white_check_mark: The patched engine connected over a local socket, completed the version handshake, stayed live with an advancing \`frame_counter\` under a 500-frame action flood, and tore down cleanly with no orphan and no leftover socket."
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Note on ARM64
         if: always()
