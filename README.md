@@ -28,6 +28,8 @@ are visible and updating inside the Raven Simulator.
   recorded.
 - The Python test suite is **103 passed, 5 skipped** (the skips are POSIX‑only
   tests that do not run on Windows).
+- Milestone 3a (hands‑free input over a local IPC socket) is in progress on
+  `feature/doomed-prism-m3`.
 
 **Not yet validated:** ARM64, and real Raven Prism hardware. The simulator is an
 optical preview, not the device.
@@ -43,7 +45,9 @@ watch DOOM run.
 - A spoken **"pew pew"** as a fire command. This one is not a joke; it is a
   design goal.
 
-None of these exist yet.
+Milestone 3a delivers the input core and the IPC boundary. Voice — spoken
+menu/weapon commands and a spoken **"pew pew"** — ships in Milestone 3b, after
+an offline‑speech‑library licence review.
 
 ## How it works
 
@@ -126,9 +130,11 @@ happened there.
 
 ## Building the patched engine
 
-The app reads frames from a shared‑memory segment that a small, committed patch
-(`patches/crispy-doom-fb-export.diff`) adds to Crispy Doom. Build it with
-`scripts/build_crispy.py`, not a stock checkout.
+The app reads frames from a shared‑memory segment, and drives input over a local
+IPC socket, through two small committed patches to Crispy Doom — the
+frame‑export patch (`patches/crispy-doom-fb-export.diff`) and the IPC‑input patch
+(`patches/crispy-doom-ipc-input.diff`). `scripts/build_crispy.py` applies them as
+a series; build with it, not a stock checkout.
 
 **Prerequisite:** a C toolchain plus SDL2, SDL2_mixer, and SDL2_net development
 libraries.
@@ -227,6 +233,6 @@ real Raven Prism hardware has not yet been validated.
 
 Original DOOMed Prism / PewPew Engine code is licensed under GPL-2.0-or-later.
 Crispy Doom is covered by its own upstream license; this repository contains
-only the frame‑export patch and a pinned reference to Crispy Doom, never its
-source. Source distributions include the canonical GPL-2.0 text and deliberately
+only the frame‑export and IPC‑input patches and a pinned reference to Crispy
+Doom, never its source. Source distributions include the canonical GPL-2.0 text and deliberately
 exclude the test suite, whose dependencies are development‑only.
