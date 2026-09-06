@@ -426,7 +426,9 @@ def test_a_second_connection_is_accepted_then_closed_without_disturbing_the_firs
     server: IpcServer,
 ) -> None:
     first = _connect(server)
-    second = FakeIpcClient(server.start.__self__._address if False else _current_addr(server))
+    # _connect already called server.start(); reuse the bound address (white-box,
+    # same-package test).
+    second = FakeIpcClient(server._address)
     for _ in range(10):
         server.poll()
     assert server.is_connected is True  # first client still connected
@@ -434,11 +436,6 @@ def test_a_second_connection_is_accepted_then_closed_without_disturbing_the_firs
     assert first.recv_message() == Message.pulse(10)
     first.close()
     second.close()
-
-
-def _current_addr(server: IpcServer) -> str:
-    # the fixture-created server was already start()ed by _connect
-    return server._address  # test-only introspection of the bound address
 
 
 def test_close_is_idempotent(server: IpcServer) -> None:
@@ -656,7 +653,7 @@ python -m pytest tests/test_ipc_server.py -q
 python -m pytest -q
 ```
 
-Expected: PASS. (`_current_addr` in the 2nd-client test reads `server._address` — test-only introspection; acceptable for a same-package white-box test.)
+Expected: PASS. (The 2nd-client test reads `server._address` directly — test-only introspection; acceptable for a same-package white-box test.)
 
 - [ ] **Step 5: Commit**
 
