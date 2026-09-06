@@ -40,6 +40,10 @@ def _default_factory() -> "tuple[socket.socket, str]":
         pass
     listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     listener.bind(path)
+    try:
+        os.chmod(path, 0o600)  # owner-only: no local user can race-connect
+    except OSError:
+        pass  # some platforms no-op / reject chmod on a socket node
     listener.listen(2)
     listener.setblocking(False)
     return listener, path
