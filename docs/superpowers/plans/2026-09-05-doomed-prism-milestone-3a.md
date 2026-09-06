@@ -1036,7 +1036,7 @@ void IPC_Input_Shutdown(void)
 
 - `src/i_video.c`, `I_InitGraphics`: `#include "i_ipc_input.h"` in the include block; `IPC_Input_Init();` on the line immediately **after** patch 1's `FB_Export_Init();` (a distinct added line — not an edit of patch 1's line).
 - `src/i_video.c`, `I_ShutdownGraphics`: `IPC_Input_Shutdown();` immediately before patch 1's `FB_Export_Shutdown();`.
-- `src/d_loop.c`: `#include "i_ipc_input.h"` near the top; add `IPC_Input_Pump();` **once per built tic**, immediately before the `loop_interface->ProcessEvents();` call inside `BuildNewTic()` (or its caller `NetUpdate()`). **Binding invariant (spec §10):** exactly one pump per game tic, after SDL events are drained and before `G_BuildTiccmd`. Confirm the real function + line at `crispy-doom-7.1` and record it in the `i_ipc_input.c` header comment (M2 §0 precedent). If neither is reachable, fall back to `D_ProcessEvents()` in `src/d_main.c`.
+- `src/d_loop.c`: `#include "i_ipc_input.h"` near the top; add a single `IPC_Input_Pump();` call so that **the binding invariant (spec §10) holds: exactly one pump per built game tic, after SDL events are drained (`loop_interface->ProcessEvents()` / `I_StartTic`) and before `G_BuildTiccmd` runs for that tic.** In `crispy-doom-7.1`'s Chocolate-derived `d_loop.c`, `ProcessEvents()` is called from `NetUpdate()`, and `BuildNewTic()` (which calls `loop_interface->BuildTiccmd`) runs in the tic-build loop after it — so the pump goes at the top of `BuildNewTic()` (once per tic actually built), *not* in `NetUpdate()` (which can build zero or several tics per call). Confirm the exact function + line against the tag and record it in the `i_ipc_input.c` header comment (M2 §0 precedent). Any hook that breaks the once-per-built-tic invariant is a design change, not an implementation detail.
 - `src/CMakeLists.txt`: add `i_ipc_input.c        i_ipc_input.h` to `GAME_SOURCE_FILES` on a line **not adjacent** to patch 1's `i_framebuffer_export.*` line (e.g. next to `i_input.c`). Add a **separate** `if(WIN32)\n    list(APPEND EXTRA_LIBS ws2_32)\nendif()` block that does not touch patch 1's `winmm shlwapi` line.
 
 - [ ] **Step 5: Build the doubly-patched engine**
@@ -1119,7 +1119,10 @@ git commit -m "feat: add the Crispy Doom IPC-input patch"
 - Consumes: `crispy-doom.lock` (`commit`), both patch files.
 - Produces:
   - `PATCHES: tuple[Path, ...] = (_ROOT / "patches" / "crispy-doom-fb-export.diff", _ROOT / "patches" / "crispy-doom-ipc-input.diff")`.
-  - `plan_commands(lock, *, build_dir, patches=PATCHES, check_only) -> list[list[str]]` — begins (marker absent or `check_only`) with `git -C <build_dir> reset --hard <lock.commit>` then `git -C <build_dir> clean -fd -- src/`, then: for a real build one `git -C <build_dir> apply <p>` per patch then `cmake` configure + build; for `check_only`, `git -C <build_dir> apply <p1>` (real) then `git -C <build_dir> apply --check <p>` for every `p` after the first.
+  - `plan_commands(lock, *, build_dir, patches=PATCHES, check_only) -> list[list[str]]`:
+    - **`check_only`:** optional `git clone`, then `git -C <build_dir> reset --hard <lock.commit>`, `git -C <build_dir> clean -fd -- src/`, `git -C <build_dir> apply <p1>` (real), then `git -C <build_dir> apply --check <p>` for every `p` after the first. No `cmake`.
+    - **Real build, marker absent:** optional `git clone`, `reset --hard`, `clean -fd -- src/`, `git -C <build_dir> apply <p>` for every patch in order, then `cmake` configure + `cmake --build`.
+    - **Real build, marker present:** optional `git clone` only (normally none), then straight to `cmake` configure + `cmake --build` — no `reset`/`clean`/`apply` (preserves `test_run_skips_git_apply_when_marker_present`).
   - `run(..., _patches=None)` writes the `.doomed-prism-applied` marker exactly once, only after the last non-`--check` `git apply` command succeeds.
 
 - [ ] **Step 1: Update the failing tests**
@@ -1168,25 +1171,58 @@ def test_plan_commands_check_only_applies_p1_for_real_then_checks_the_rest(
 def test_run_writes_the_marker_only_after_the_last_patch_applies(tmp_path: Path) -> None:
     build_dir = tmp_path / "build" / "crispy"
     (build_dir / ".git").mkdir(parents=True)
-    patches = (tmp_path / "p1.diff", tmp_path / "p2.diff")
-    for p in patches:
-        p.write_text("x", encoding="utf-8")
+    p1, p2 = tmp_path / "p1.diff", tmp_path / "p2.diff"
+    calls: list[list[str]] = []
 
-    def runner(cmd, **_):
-        class _R:
-            returncode = 1 if (cmd[-1].endswith("p2.diff") and "apply" in cmd
-                               and "--check" not in cmd) else 0
-        return _R()
-
+    # _make_runner already answers `git rev-parse HEAD`; fail only the real `apply p2`.
     exit_code = build_crispy.run(
-        [], runner=runner, _build_dir=build_dir, _lock_path=_write_lock(tmp_path),
-        _patches=patches,
+        [],
+        runner=_make_runner(calls, head=_COMMIT, fail_cmd_substr=f"apply {p2}"),
+        fetch=_fake_fetch(),
+        _build_dir=build_dir,
+        _lock_path=_write_lock(tmp_path),
+        _patches=(p1, p2),
     )
     assert exit_code == 1
-    assert not (build_dir / ".doomed-prism-applied").exists()
+    assert not (build_dir / build_crispy._MARKER).exists()
+
+
+def test_run_writes_the_marker_once_when_the_series_applies(tmp_path: Path) -> None:
+    build_dir = tmp_path / "build" / "crispy"
+    (build_dir / ".git").mkdir(parents=True)
+    p1, p2 = tmp_path / "p1.diff", tmp_path / "p2.diff"
+    calls: list[list[str]] = []
+
+    exit_code = build_crispy.run(
+        [],
+        runner=_make_runner(calls, head=_COMMIT),
+        fetch=_fake_fetch(),
+        _build_dir=build_dir,
+        _lock_path=_write_lock(tmp_path),
+        _patches=(p1, p2),
+    )
+    assert exit_code == 0
+    assert (build_dir / build_crispy._MARKER).read_text(encoding="utf-8") == "1"
+    joined = [" ".join(c) for c in calls]
+    assert any(c.endswith("reset --hard " + _COMMIT) for c in joined)
+    assert any(c.endswith("clean -fd -- src/") for c in joined)
 ```
 
-Update the existing `test_plan_commands_clones_pinned_tag_applies_patch_then_builds` (and any test asserting a single `apply`) to the two-patch shape, and add `_patches=` to `run`'s test seam.
+**Rename every existing use of the old single-patch seam.** In `tests/test_build_crispy.py`,
+`plan_commands(..., patch=X, ...)` → `plan_commands(..., patches=(X, tmp_path / "p2.diff"), ...)`
+and `run(..., _patch=tmp_path / "p.diff", ...)` → `run(..., _patches=(tmp_path / "p1.diff", tmp_path / "p2.diff"), ...)`
+in all of: `test_plan_commands_clones_pinned_tag_applies_patch_then_builds`,
+`test_plan_commands_check_only_stops_after_git_apply_check`,
+`test_run_skips_git_apply_when_marker_present`, `test_clean_removes_the_build_directory`,
+`test_run_happy_path_verifies_commit_then_applies_and_builds`,
+`test_run_aborts_on_commit_mismatch_before_apply_or_cmake`,
+`test_check_verifies_commit_before_git_apply_check`,
+`test_run_happy_path_downloads_and_verifies_tarball`, `test_run_aborts_on_tarball_mismatch`,
+`test_offline_skips_tarball_download_but_still_verifies_commit`,
+`test_offline_still_aborts_on_commit_mismatch`. Their loose `any("apply" in c ...)` /
+`any("clone" ...)` / `not any("cmake" ...)` assertions all still hold under the two-patch shape;
+`test_plan_commands_check_only_stops_after_git_apply_check` still passes because a 2-tuple still
+emits an `apply --check <p2>` command.
 
 - [ ] **Step 2: Run and confirm failure**
 
@@ -1214,15 +1250,18 @@ def plan_commands(lock, *, build_dir, patches=PATCHES, check_only):
         commands.append(
             ["git", "clone", "--branch", lock.tag, lock.repo, str(build_dir)]
         )
-    commands.append(git + ["reset", "--hard", lock.commit])
-    commands.append(git + ["clean", "-fd", "--", "src/"])
     if check_only:
+        commands.append(git + ["reset", "--hard", lock.commit])
+        commands.append(git + ["clean", "-fd", "--", "src/"])
         commands.append(git + ["apply", str(patches[0])])
         for patch in patches[1:]:
             commands.append(git + ["apply", "--check", str(patch)])
         return commands
-    for patch in patches:
-        commands.append(git + ["apply", str(patch)])
+    if not (build_dir / _MARKER).exists():
+        commands.append(git + ["reset", "--hard", lock.commit])
+        commands.append(git + ["clean", "-fd", "--", "src/"])
+        for patch in patches:
+            commands.append(git + ["apply", str(patch)])
     commands.append(
         ["cmake", "-S", str(build_dir), "-B", str(build_dir / "build"),
          "-DCMAKE_BUILD_TYPE=Release"]
@@ -1231,19 +1270,20 @@ def plan_commands(lock, *, build_dir, patches=PATCHES, check_only):
     return commands
 ```
 
-- In `run`, add `_patches: tuple[Path, ...] | None = None` to the signature; bind `patches = _patches or PATCHES`, `git = ["git", "-C", str(build_dir)]`, `last_apply = git + ["apply", str(patches[-1])]`. Replace the old per-`apply` marker write with:
+- In `run`: replace the `_patch: Path | None = None` parameter with `_patches: tuple[Path, ...] | None = None`. Bind `patches = _patches or PATCHES` and pass `patches=patches` into `plan_commands`. Bind `git = ["git", "-C", str(build_dir)]` and `last_apply = git + ["apply", str(patches[-1])]`. In the `pending` execution loop, replace the old per-`apply` marker write (the `if command[:4] == ["git", "-C", str(build_dir), "apply"] and "--check" not in command:` block) with:
 
 ```python
-    for command in commands:
+    for command in pending:
         result = runner(command, cwd=str(_ROOT))
         if getattr(result, "returncode", 0) != 0:
             print(f"command failed: {' '.join(command)}", file=sys.stderr)
             return 1
         if not args.check and command == last_apply:
+            build_dir.mkdir(parents=True, exist_ok=True)
             (build_dir / _MARKER).write_text("1", encoding="utf-8")
 ```
 
-- Keep the `git rev-parse HEAD == lock.commit` and `tarball_sha256` checks (they still run; `reset --hard <commit>` keeps HEAD at the pinned commit).
+- Keep `verify_commit` and `verify_tarball` unchanged — they still run between the optional clone and the `pending` loop; `reset --hard <lock.commit>` keeps HEAD at the pinned commit so `verify_commit` still passes. Delete the now-unused `_DEFAULT_PATCH` constant (nothing references it).
 
 - [ ] **Step 4: Run tests and the suite**
 
@@ -2402,8 +2442,14 @@ git commit -m "feat: pass the IPC address and optional warp target to Crispy"
 - Consumes: `pewpew.ipc.server` (`IpcServer`), `pewpew.ipc.protocol` (`IPC_HANDSHAKE_TIMEOUT_S`), `pewpew.input.pipeline` (`InputPipeline`), `pewpew.input.simulator_source` (`SimulatorInputSource`), `pewpew.engine.DoomProcess.ipc_address`.
 - Produces (added to `DoomHostWidget`, all keyword-only, test-injectable):
   - `__init__(..., *, ipc_server: IpcServer | None = None, input_pipeline: InputPipeline | None = None)`. When `ipc_server` / `input_pipeline` are given they are used verbatim; otherwise `showEvent` builds them.
-  - `showEvent` (first-start branch): `self._server = ipc_server or IpcServer()`; `self._server.on_disconnect = self._on_ipc_disconnect`; `addr = self._server.start()`; `self._engine.start(ipc_address=addr)` (replacing the bare `start()`); `self._pipeline = input_pipeline or InputPipeline(SimulatorInputSource(self.viewport), self._server.send)`; `self._ipc_deadline = self._clock() + IPC_HANDSHAKE_TIMEOUT_S`.
-  - `_on_tick`: **first statement** (before every existing early return) → `if self._server is not None: self._server.poll()`. After the existing frame-wait guard clears → `self._pipeline.tick(self._clock())`. Then: if `self._server.protocol_mismatch` → `_cleanup_after_startup_failure()` then `raise RuntimeError("input protocol mismatch")`; elif `not self._server.is_connected and self._seen_frame and self._clock() > self._ipc_deadline` → `_cleanup_after_startup_failure()` then `raise RuntimeError("engine did not connect input")`.
+  - `showEvent` (first-start branch): compute `now = self._clock()` **once** and use it for both deadlines — `self._deadline = now + self._SEGMENT_OPEN_TIMEOUT_S` (M2's existing line, changed to reuse `now`) and `self._ipc_deadline = now + IPC_HANDSHAKE_TIMEOUT_S`. `self._server = ipc_server or IpcServer()`; `self._server.on_disconnect = self._on_ipc_disconnect`; `addr = self._server.start()`; `self._engine.start(ipc_address=addr)` (replacing the bare `start()`); `self._pipeline = input_pipeline or InputPipeline(SimulatorInputSource(self.viewport), self._server.send)`.
+  - `_on_tick` order:
+    1. **First**, before every existing early return: `if self._server is not None: self._server.poll()`.
+    2. **Then**, still before the M2 frame-wait early returns: `if self._server is not None and self._server.protocol_mismatch:` → `_cleanup_after_startup_failure()` then `raise RuntimeError("input protocol mismatch")`. A protocol mismatch is fatal regardless of frame state (spec §12), so it is checked here, not after the frame guard.
+    3. The existing M2 frame-wait guard / early returns / `_seen_frame` logic, unchanged.
+    4. Once past the frame guard: `if self._pipeline is not None: self._pipeline.tick(self._clock())`.
+    5. `if self._server is not None and not self._server.is_connected and self._seen_frame and self._clock() > self._ipc_deadline:` → `_cleanup_after_startup_failure()` then `raise RuntimeError("engine did not connect input")`. This one *does* require frames (`_seen_frame`) — mirroring M2's "opened but no frames" logic — so a healthy engine that simply has not connected yet is not torn down prematurely.
+    6. The existing counter / repaint logic.
   - `_on_ipc_disconnect`: `if self._pipeline is not None: self._pipeline.release_all()`; `if self._server is not None: self._server.close()`. **No `PAUSE`.**
   - `cleanup()` (extended in Task 12) already exists; Task 11 only adds `self._server` and `self._pipeline` fields (default `None`) and the wiring above.
 
@@ -2496,29 +2542,32 @@ def test_ipc_disconnect_releases_all_and_closes_without_pause(qtbot) -> None:
 
 
 def test_protocol_mismatch_raises_after_cleanup(qtbot) -> None:
+    # No frame is set: the mismatch check runs before the M2 frame-wait guard.
     host, engine, _, server, _ = _ipc_host(qtbot)
     server.protocol_mismatch = True
     host.show()
     with pytest.raises(RuntimeError, match="input protocol mismatch"):
         host._on_tick()
-    assert engine.stop_calls == 1 or getattr(host, "_server", server).closed >= 1
+    assert engine.stop_calls == 1
 
 
 def test_no_ipc_connection_past_deadline_raises(qtbot) -> None:
     reader = _Reader()
-    clock = iter([0.0, 100.0, 100.0, 100.0])
+    now = [0.0]  # showEvent arms both deadlines from now[0]; the tick reads a later value
     host, engine, _, server, _ = _ipc_host(qtbot, reader=reader)
-    host._clock = lambda: next(clock)  # type: ignore[assignment]
-    host.show()
+    host._clock = lambda: now[0]  # type: ignore[assignment]
+    host.show()                    # _deadline = 10.0, _ipc_deadline = 10.0
     reader.try_open()
     reader.set_frame(counter=1, byte=0x20)  # frames flowing, but IPC never connects
+    now[0] = 100.0                 # well past _ipc_deadline
     with pytest.raises(RuntimeError, match="engine did not connect input"):
         host._on_tick()
+    assert engine.stop_calls == 1
 ```
 
 - [ ] **Step 2: Run and confirm failure** — FAIL (`ipc_server=` kwarg / `_on_ipc_disconnect` / the wiring absent).
 
-- [ ] **Step 3: Implement the changes** per the Interfaces block. Keep the M2 framebuffer path (`_DoomViewport`, `_seen_frame`, the 10 s frame deadline) intact; the IPC concerns are additive. `_on_tick` order: `server.poll()` → (M2 frame-wait guard / early returns) → `pipeline.tick()` → protocol-mismatch / IPC-deadline checks → the existing counter/repaint logic. The handshake deadline only fires once frames are flowing (`self._seen_frame`), mirroring M2's "opened but no frames" logic.
+- [ ] **Step 3: Implement the changes** per the Interfaces block (the numbered `_on_tick` order is the contract). Keep the M2 framebuffer path (`_DoomViewport`, `_seen_frame`, the frame deadline) intact; the IPC concerns are additive. `showEvent` arms both `self._deadline` and `self._ipc_deadline` from a single `now = self._clock()` call.
 
 - [ ] **Step 4: Run tests and the suite**
 
@@ -2547,10 +2596,11 @@ git commit -m "feat: wire the IPC server and input pipeline into the host widget
 **Interfaces:**
 - Consumes: Task 11's `self._server` / `self._pipeline`.
 - Produces:
-  - `class _PauseOverlay(QWidget)` — a translucent child of the host, `objectName() == "pause_overlay"`, covering the viewport rect, `paintEvent` draws `PAUSED` in an emitted-light colour. Its visibility is set from `self._pipeline.paused` on every tick and on every hide/show transition.
-  - `hideEvent` (guard `if self._shutdown_requested or not self._started: return` after the existing `super().hideEvent(event)` + `self._timer.stop()`): `self._pipeline.release_all()`; if `not self._pipeline.paused`: `self._pipeline.toggle_pause()`; `self._pause_overlay.setVisible(True)`.
-  - `showEvent` restart branch (already-started, not shutting down): if `self._pipeline.paused`: `self._pipeline.toggle_pause()`; `self._pause_overlay.setVisible(False)`; `self._pipeline.release_all()`; then the existing `self._timer.start()`.
-  - `cleanup()` re-ordered: stop the timer → `if self._pipeline is not None: self._pipeline.release_all()` → `if self._server is not None: self._server.close(); self._server = None` → (existing) `reader.close()` → `engine.stop()`. Keep the existing retry-on-transient-failure behaviour and idempotence; `pipeline.release_all()` and `server.close()` are both safe on a dead child.
+  - `class _PauseOverlay(QWidget)` — a translucent child of the host, `objectName() == "pause_overlay"`, covering the viewport rect, `paintEvent` draws `PAUSED` in an emitted-light colour. Created in `__init__` as a child of `self`, hidden initially.
+  - `_sync_pause_overlay(self)` — `self._pause_overlay.setVisible(self._pipeline.paused if self._pipeline is not None else False)`. Called **as the first thing in `_on_tick` after `self._server.poll()`** (i.e. before any M2 early return, so a test that calls `_on_tick()` with no frame still updates the overlay), and at the end of `hideEvent` / the `showEvent` restart branch.
+  - `hideEvent` (after the existing `super().hideEvent(event)` + `self._timer.stop()`; then `if self._shutdown_requested or not self._started: return`): `self._pipeline.release_all()`; if `not self._pipeline.paused`: `self._pipeline.toggle_pause()`; `self._sync_pause_overlay()`.
+  - `showEvent` restart branch (already-started, not shutting down): if `self._pipeline.paused`: `self._pipeline.toggle_pause()`; `self._pipeline.release_all()`; `self._sync_pause_overlay()`; then the existing `self._timer.start()`.
+  - `cleanup()` re-ordered: stop the timer → `if self._pipeline is not None:` try `self._pipeline.release_all()`, on success `self._pipeline = None` → `if self._server is not None:` try `self._server.close()`, on success `self._server = None` → (existing) `reader.close()` then `engine.stop()`, each keeping the existing retry-on-transient-failure / on-success-null pattern so a second `cleanup()` is a genuine no-op. `pipeline.release_all()` and `server.close()` are both safe on a dead child.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -2560,10 +2610,11 @@ Add to `tests/test_host_widget_qt.py`:
 def test_pause_overlay_visibility_follows_pipeline_paused(qtbot) -> None:
     host, _, _, _, pipeline = _ipc_host(qtbot)
     host.show()
-    assert host.findChild(QWidget, "pause_overlay") is not None
+    overlay = host.findChild(QWidget, "pause_overlay")
+    assert overlay is not None
     pipeline.paused = True
-    host._on_tick()
-    assert host.findChild(QWidget, "pause_overlay").isVisible() is True
+    host._on_tick()  # _sync_pause_overlay runs before the frame-wait early return
+    assert overlay.isVisibleTo(host) is True
 
 
 def test_hideevent_releases_all_pauses_and_shows_overlay(qtbot) -> None:
@@ -2572,7 +2623,8 @@ def test_hideevent_releases_all_pauses_and_shows_overlay(qtbot) -> None:
     host.hide()
     assert pipeline.releases >= 1
     assert pipeline.paused is True
-    assert host.findChild(QWidget, "pause_overlay").isVisible() is True
+    # host is hidden, so isVisible() is False; isVisibleTo(host) reflects the overlay's own flag
+    assert host.findChild(QWidget, "pause_overlay").isVisibleTo(host) is True
 
 
 def test_showevent_after_start_unpauses_and_hides_overlay(qtbot) -> None:
@@ -2581,7 +2633,7 @@ def test_showevent_after_start_unpauses_and_hides_overlay(qtbot) -> None:
     host.hide()          # -> paused
     host.show()           # restart branch
     assert pipeline.paused is False
-    assert host.findChild(QWidget, "pause_overlay").isVisible() is False
+    assert host.findChild(QWidget, "pause_overlay").isVisibleTo(host) is False
 
 
 def test_cleanup_order_includes_pipeline_release_and_server_close(qtbot) -> None:
@@ -2593,13 +2645,13 @@ def test_cleanup_order_includes_pipeline_release_and_server_close(qtbot) -> None
     engine.stop = lambda: order.append("engine")            # type: ignore[assignment]
     host.cleanup()
     assert order == ["release", "server", "reader", "engine"]
-    host.cleanup()  # idempotent
+    host.cleanup()  # idempotent: pipeline and server are None now, nothing re-runs
     assert order == ["release", "server", "reader", "engine"]
 ```
 
-- [ ] **Step 2: Run and confirm failure** — FAIL (`_PauseOverlay` / hide-show symmetry / cleanup order absent).
+- [ ] **Step 2: Run and confirm failure** — FAIL (`_PauseOverlay` / `_sync_pause_overlay` / hide-show symmetry / cleanup order absent).
 
-- [ ] **Step 3: Implement the changes** per the Interfaces block. The overlay is created in `__init__` (or the first `showEvent`) as a child of `self`, geometry `self.viewport.geometry()`, hidden initially. `hideEvent`/`showEvent` guards use the existing `self._shutdown_requested` and `self._started` flags.
+- [ ] **Step 3: Implement the changes** per the Interfaces block. The overlay is created in `__init__` as a child of `self`, geometry `self.viewport.geometry()`, hidden initially. `_sync_pause_overlay()` runs early in `_on_tick` (right after `server.poll()`). `hideEvent`/`showEvent` guards use the existing `self._shutdown_requested` and `self._started` flags. `cleanup()` nulls `self._pipeline` / `self._server` on success so the second call is a no-op.
 
 - [ ] **Step 4: Run tests and the suite**
 
