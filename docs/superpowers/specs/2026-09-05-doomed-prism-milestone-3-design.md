@@ -178,15 +178,18 @@ mapping entry, and one `Action` enum member; the `code` space reserves the room.
 
 ### R7 — Fire fusion has two abstract sources; only the deliberate-action source is real in 3a
 
-`FireArbiter` consumes edges from a `DeliberateActionSource` (double-blink on
-hardware, click in the simulator — §6) and a `SpokenFireSource` (spoken "pew
-pew" — §6). 3a supplies a real `DeliberateActionSource` (simulator click) and a
-`NullSpokenFireSource` that never fires. A separate
-`pewpew.input.DebugKeySpokenFireSource` (env-gated, §9) drives the fusion path
-in the 3a gate without real audio; `tests/fakes` carries a `FakeSpokenFireSource`
-for unit tests. 3b supplies the real acoustic `SpokenFireSource`. Both sources
-feed one `FIRE` pulse through shared debounce so a blink and a "pew pew" inside
-the debounce window produce exactly one shot (§6).
+`FireArbiter` consumes a *deliberate-action* edge (double-blink on hardware,
+click in the simulator — §6) and a *spoken-fire* edge (spoken "pew pew" — §6).
+In 3a the deliberate-action edge is the simulator click, and the spoken-fire
+edge is stubbed: the pipeline's `spoken_fire` source is a `NullSpokenFireSource`
+that never fires, and the 3a gate drives the fusion path without real audio via
+an env-gated `F9` key on `SimulatorInputSource` that sets
+`InputSample.debug_fire_edge`, which `InputPipeline.tick` routes into
+`FireArbiter.spoken_fire()`. `tests/fakes` carries a `FakeSpokenFireSource` with
+a `trigger()` method for the fusion unit tests. 3b supplies the real acoustic
+`SpokenFireSource` as the pipeline's `spoken_fire`. Both edges feed one `FIRE`
+pulse through shared debounce so a blink and a "pew pew" inside the debounce
+window produce exactly one shot (§6).
 
 **Cost if wrong.** None structural — the interface is designed for both sources
 from the start.
@@ -194,12 +197,13 @@ from the start.
 ### R8 — The Raven-facing input source sits behind an `InputSource` protocol; only `SimulatorInputSource` is implemented
 
 `SimulatorInputSource` reads gaze position (mouse), focused-element activation
-(click), the physical button (Enter → `PAUSE`), and — only when
-`DOOMED_PRISM_DEBUG_FIRE` is set — an `F9` debug key that stands in for a spoken
-"pew pew", all from Qt events on the host widget, never from Raven APIs directly
-(§6: "The game bridge does not depend directly on Raven APIs"). `PrismInputSource`
-is a documented stub raising `NotImplementedError`. Real gaze coordinates, a raw
-double-blink event, and sensor entitlements are §12 hardware-phase items.
+(click → `activation_edge`), the physical button (Enter → `pause_edge`), and —
+only when `DOOMED_PRISM_DEBUG_FIRE` is set — an `F9` debug key
+(→ `debug_fire_edge`) that stands in for a spoken "pew pew", all from Qt events
+on the host widget, never from Raven APIs directly (§6: "The game bridge does
+not depend directly on Raven APIs"). `PrismInputSource` is a documented stub
+raising `NotImplementedError`. Real gaze coordinates, a raw double-blink event,
+and sensor entitlements are §12 hardware-phase items.
 
 **Cost if wrong.** The protocol may need one more method for real gaze/blink
 entitlements — a change §12 already anticipates.
@@ -333,8 +337,9 @@ inputs with no stuck key and no orphan process?**
   change.
 - `FireArbiter` + the two source protocols (R7), with the real deliberate-action
   (simulator click) source and `NullSpokenFireSource` in 3a.
-- `InputSource` protocol + `SimulatorInputSource` (Qt events on the host) +
-  `PrismInputSource` stub + `DebugKeySpokenFireSource` (env-gated, gate only).
+- `InputSource` protocol + `SimulatorInputSource` (Qt events on the host,
+  including the env-gated `F9` → `debug_fire_edge` gate scaffold) +
+  `PrismInputSource` stub.
 - `InputPipeline`: the one unit that wires source → gaze → fire → router →
   server, ticked from the host timer, with `release_all()`.
 - `pewpew.engine` and `pewpew.host_widget` changes to own the server lifecycle,
@@ -422,7 +427,7 @@ PewPew Engine process                              Crispy Doom process (patch se
 | `pewpew.input.actions` | Python | `Action` enum (the sole `Action ↔ int` mapping, matching the §5 table), `HeldAction(action, magnitude)`, `ActionRouter(sink)`: `set_held(frozenset[HeldAction])`, `pulse(Action)`, `discrete(Action)`, `release_all()`. Quantises turn magnitude to `MAGNITUDE_STEPS`; emits a frame only when a quantised step or on/off state changes. Constants `MAGNITUDE_STEPS`, `TURN_MAX_MOUSE_DELTA`. Pure + sink. | `pewpew.ipc.protocol` |
 | `pewpew.input.gaze` | Python | `GazeZoneMap(surface_w, surface_h, *, dead_zone=(180,150), turn_exponent=1.5)`: `resolve(x, y) -> frozenset[HeldAction]` (region → actions; raw float magnitude). `GazeFilter(*, dwell_s=0.15, grace_s=0.02, ema_alpha=0.4)`: `update(raw_set, now) -> frozenset[HeldAction]`. Pure; time via the `now` argument only. | `pewpew.input.actions` |
 | `pewpew.input.fire` | Python | `FireArbiter(*, debounce_s=0.12)`: `deliberate_action()`, `spoken_fire()`, `poll(now) -> bool`, `reset()`. `DeliberateActionSource` / `SpokenFireSource` protocols; `NullSpokenFireSource`. Pure; time via `poll(now)` only. | — |
-| `pewpew.input.source` | Python | `InputSource` protocol: `sample(now) -> InputSample`. `InputSample(gaze_xy: tuple[int,int] | None, activation_edge: bool, pause_edge: bool, debug_fire_edge: bool)`. `PrismInputSource` stub. `DebugKeySpokenFireSource` (implements `SpokenFireSource`; only armed when `DOOMED_PRISM_DEBUG_FIRE` is set). | — |
+| `pewpew.input.source` | Python | `InputSource` protocol: `sample(now) -> InputSample`. `InputSample(gaze_xy: tuple[int,int] | None, activation_edge: bool, pause_edge: bool, debug_fire_edge: bool)`. `PrismInputSource` stub. | — |
 | `pewpew.input.simulator_source` | Python | `SimulatorInputSource(widget)`: a Qt event filter tracks mouse position, left-press edges, `Return`/`Enter` edges, and (env-gated) `F9` edges; `sample(now)` returns and clears the accumulated `InputSample`. `Leave` sets `gaze_xy = None`. | PySide6, `pewpew.input.source` |
 | `pewpew.input.pipeline` | Python | `InputPipeline(source, server, *, spoken_fire=NullSpokenFireSource())`: builds `GazeZoneMap`, `GazeFilter`, `FireArbiter`, `ActionRouter(sink=server.send)`. `tick(now)`, `release_all()`, `toggle_pause()`, `paused: bool`. The single integration unit. Time via `tick(now)`. | all of the above |
 | `pewpew.engine` (modified) | Python | `start(*, ipc_address: str | None = None)` injects `DOOMED_PRISM_IPC_ADDR`; when `DOOMED_PRISM_WARP` is set, appends `-warp <value> -skill <DOOMED_PRISM_SKILL or 3>` to argv; `ipc_address` property. `stop()` does **not** touch the socket path (the server owns it). Mirrors the existing `frame_segment_name` env handling. | existing |
@@ -617,10 +622,10 @@ carried a separate `cooldown_s` for a future auto-fire guard; cut as YAGNI.)
 
 `DeliberateActionSource` protocol: `activation_edge() -> bool` (consumed each
 tick). `SpokenFireSource` protocol: `spoken_fire_edge() -> bool`.
-`NullSpokenFireSource` returns `False` forever (3a default).
-`DebugKeySpokenFireSource` returns `True` once per `F9` press, and only when
-`DOOMED_PRISM_DEBUG_FIRE` is set. `FakeSpokenFireSource` (test fakes) exposes
-`trigger()`.
+`NullSpokenFireSource` returns `False` forever (3a default). `FakeSpokenFireSource`
+(test fakes) exposes `trigger()` and is used in the fusion unit tests. In the 3a
+gate the spoken-fire edge comes from `SimulatorInputSource`'s env-gated `F9`
+key via `InputSample.debug_fire_edge`, not a `SpokenFireSource`.
 
 ## 9. Input sources
 
@@ -673,11 +678,13 @@ style; upstream notices in edited files preserved):
     `key_up` / `key_down` (Crispy's configured bindings) and set a `held[]` bit;
     `value == 0` → `ev_keyup` and clear the bit.
   - `TURN` `TURN_LEFT` / `TURN_RIGHT`: `int d = value; if (d > IPC_TURN_CLAMP) d
-    = IPC_TURN_CLAMP;` then `D_PostEvent(&(event_t){ev_mouse, mousebuttons_now,
-    (code == TURN_LEFT ? -d : d), 0})` — direction from `code`, magnitude from
-    `value`, `data1` carries the current mouse-button bitmap (not `0`, so an
-    injected turn does not clear `mousebuttons[]` for a tester using the SDL
-    fallback). Post only when `d != 0`.
+    = IPC_TURN_CLAMP; if (d < 0) d = 0;` then post an `ev_mouse` event with
+    `data2 = (code == TURN_LEFT ? -d : d)` and `data3 = 0` — direction from
+    `code`, magnitude from `value`. `data1` (the mouse-button bitmap) is set to
+    `0`: the 3a gate runs with Crispy's SDL window unfocused, so a per-tic
+    `SetMouseButtons(0)` is harmless; tracking the real SDL button state for a
+    concurrently-used SDL fallback is a hardware-phase refinement. Post only when
+    `d != 0`.
   - `PULSE` `FIRE` / `USE`: `ev_keydown` of `key_fire` / `key_use` now, and
     schedule the paired `ev_keyup` for `PULSE_HOLD_TICS` (2) pump calls later —
     a small per-key countdown array, decremented once per `IPC_Input_Pump()`.
@@ -927,8 +934,7 @@ a pre-connected `socketpair` injector.
   `t = 0, 0.05, 0.20` with `debounce_s = 0.12` → 2 shots (the mid edge is
   discarded, not queued); `deliberate` and `spoken` edges fuse; `reset()` drops
   pending edges. `NullSpokenFireSource` never fires; `FakeSpokenFireSource.
-  trigger()` does; `DebugKeySpokenFireSource` is inert unless
-  `DOOMED_PRISM_DEBUG_FIRE` is set.
+  trigger()` does.
 - **`pewpew.input.pipeline`.** With a `FakeInputSource` and a `FakeIpcServer`
   recording sent `Message`s: a scripted gaze track produces the expected frame
   sequence; an `activation_edge` produces a `FIRE` pulse; a `pause_edge` toggles
@@ -1011,10 +1017,11 @@ R11, §5), and per-task **Files** / **Interfaces** / failing-test-first
 6. `pewpew.input.gaze` — `GazeZoneMap`, `GazeFilter` (single release rule,
    `now`-argument time); `tests/test_input_gaze.py`.
 7. `pewpew.input.fire` — `FireArbiter` (discard-in-window), source protocols,
-   `NullSpokenFireSource`; `tests/test_input_fire.py`.
+   `NullSpokenFireSource`, `tests/fakes/fake_fire.py` (`FakeSpokenFireSource`);
+   `tests/test_input_fire.py`.
 8. `pewpew.input.source` + `pewpew.input.simulator_source` — `InputSource`,
-   `InputSample` (incl. `debug_fire_edge`), `SimulatorInputSource`,
-   `PrismInputSource` stub, `DebugKeySpokenFireSource`;
+   `InputSample` (incl. `debug_fire_edge`), `SimulatorInputSource` (with the
+   env-gated `F9` handler), `PrismInputSource` stub;
    `tests/test_input_source.py` + a `pytest-qt` module.
 9. `pewpew.input.pipeline` — `InputPipeline.tick` / `release_all` /
    `toggle_pause` / `paused`; `tests/test_input_pipeline.py`,
