@@ -23,3 +23,45 @@ def test_source_distribution_explicitly_excludes_unshipped_test_dependencies() -
     manifest = (ROOT / "MANIFEST.in").read_text(encoding="utf-8")
 
     assert "prune tests" in manifest.splitlines()
+
+
+def test_readme_names_both_engine_patches_in_the_license_section() -> None:
+    text = (ROOT / "README.md").read_text(encoding="utf-8")
+    license_section = text.split("## License", 1)[1].lower()
+    assert "frame" in license_section and "ipc" in license_section
+    diffs = {p.name for p in (ROOT / "patches").iterdir() if p.suffix == ".diff"}
+    assert diffs == {"crispy-doom-fb-export.diff", "crispy-doom-ipc-input.diff"}
+
+
+def test_c_patch_constants_match_the_python_enums() -> None:
+    import re
+
+    from pewpew.input.actions import Action
+    from pewpew.ipc.protocol import MessageType
+
+    diff = (ROOT / "patches" / "crispy-doom-ipc-input.diff").read_text(encoding="utf-8")
+    defs = {n: int(v) for n, v in re.findall(r"#define\s+(AC_\w+|MT_\w+)\s+(\d+)", diff)}
+    assert defs["AC_MOVE_FORWARD"] == Action.MOVE_FORWARD
+    assert defs["AC_MOVE_BACKWARD"] == Action.MOVE_BACKWARD
+    assert defs["AC_TURN_LEFT"] == Action.TURN_LEFT
+    assert defs["AC_TURN_RIGHT"] == Action.TURN_RIGHT
+    assert defs["AC_FIRE"] == Action.FIRE
+    assert defs["AC_USE"] == Action.USE
+    assert defs["AC_PAUSE"] == Action.PAUSE
+    assert defs["MT_HELLO"] == MessageType.HELLO
+    assert defs["MT_ACTION"] == MessageType.ACTION
+    assert defs["MT_PULSE"] == MessageType.PULSE
+    assert defs["MT_DISCRETE"] == MessageType.DISCRETE
+    assert defs["MT_TURN"] == MessageType.TURN
+    assert defs["MT_BYE"] == MessageType.BYE
+
+    # Numeric couplings that would misbehave silently if they drift.
+    from pewpew.input.actions import TURN_MAX_MOUSE_DELTA
+    from pewpew.ipc.protocol import IPC_FRAME_SIZE, IPC_PROTOCOL_VERSION
+
+    frame_size = int(re.search(r"#define\s+IPC_FRAME_SIZE\s+(\d+)", diff).group(1))
+    assert frame_size == 8 == IPC_FRAME_SIZE
+    proto = int(re.search(r"#define\s+IPC_PROTOCOL_VERSION\s+(\d+)", diff).group(1))
+    assert proto == IPC_PROTOCOL_VERSION
+    turn_clamp = int(re.search(r"#define\s+IPC_TURN_CLAMP\s+(\d+)", diff).group(1))
+    assert turn_clamp == TURN_MAX_MOUSE_DELTA == 40

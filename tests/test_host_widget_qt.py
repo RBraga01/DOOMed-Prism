@@ -22,6 +22,7 @@ except ImportError as error:
 
 from pewpew.framebuffer import STRIDE, SLOT_BYTES, Frame, FrameSegmentError
 from pewpew.host_widget import DoomHostWidget
+from pewpew.ipc.protocol import Message
 
 
 class _Engine:
@@ -31,8 +32,9 @@ class _Engine:
         self._return: int | None = None
         self.frame_segment_name = "doomed-prism-fb-test-0"
 
-    def start(self) -> int:
+    def start(self, *, ipc_address: str | None = None) -> int:
         self.start_calls += 1
+        self.ipc_arg = ipc_address
         return 8128
 
     def stop(self) -> None:
@@ -231,3 +233,226 @@ def test_about_to_quit_and_close_event_both_run_cleanup(qtbot) -> None:
     host2 = _host(qtbot, engine=engine2)
     host2.close()
     assert engine2.stop_calls == 1
+
+
+class _Server:
+    def __init__(self) -> None:
+        self.started = False
+        self.closed = 0
+        self.sent: list = []
+        self.is_connected = False
+        self.protocol_mismatch = False
+        self.on_disconnect = lambda: None
+        self.poll_calls = 0
+
+    def start(self) -> str:
+        self.started = True
+        return "127.0.0.1:0"
+
+    def poll(self) -> None:
+        self.poll_calls += 1
+
+    def send(self, message) -> None:
+        self.sent.append(message)
+
+    def close(self) -> None:
+        self.closed += 1
+
+
+class _Pipeline:
+    def __init__(self) -> None:
+        self.ticks = 0
+        self.releases = 0
+        self.paused = False
+
+    def tick(self, now: float) -> None:
+        self.ticks += 1
+
+    def release_all(self) -> None:
+        self.releases += 1
+        self.paused = False
+
+    def toggle_pause(self) -> None:
+        self.paused = not self.paused
+
+
+def _ipc_host(qtbot, *, engine=None, reader=None, server=None, pipeline=None):
+    engine = engine or _Engine()
+    engine.start = lambda *, ipc_address=None: setattr(engine, "ipc_arg", ipc_address) or 8128
+    reader = reader or _Reader()
+    server = server or _Server()
+    pipeline = pipeline or _Pipeline()
+    config = SimpleNamespace(viewport_width=640, viewport_height=480)
+    host = DoomHostWidget(
+        config, engine=engine, frame_reader=reader,
+        ipc_server=server, input_pipeline=pipeline,
+    )
+    qtbot.addWidget(host)
+    return host, engine, reader, server, pipeline
+
+
+def test_showevent_starts_server_before_engine_and_passes_the_address(qtbot) -> None:
+    order: list[str] = []
+    host, engine, _, server, _ = _ipc_host(qtbot)
+    server.start = lambda: order.append("server") or "127.0.0.1:0"
+    engine.start = lambda *, ipc_address=None: order.append(f"engine:{ipc_address}") or 8128
+    host.show()
+    assert order == ["server", "engine:127.0.0.1:0"]
+
+
+def test_on_tick_polls_the_server_before_any_early_return(qtbot) -> None:
+    reader = _Reader()
+    reader.available = False  # forces the "waiting for segment" early return
+    host, _, _, server, _ = _ipc_host(qtbot, reader=reader)
+    host.show()
+    host._on_tick()
+    assert server.poll_calls >= 1
+
+
+def test_ipc_disconnect_releases_all_and_closes_without_pause(qtbot) -> None:
+    host, _, _, server, pipeline = _ipc_host(qtbot)
+    host.show()
+    host._on_ipc_disconnect()
+    assert server.closed == 1
+    assert pipeline.releases == 1
+    assert not any(getattr(m, "code", None) == 20 for m in server.sent)
+
+
+def test_protocol_mismatch_raises_after_cleanup(qtbot) -> None:
+    # No frame is set: the mismatch check runs before the M2 frame-wait guard.
+    host, engine, _, server, _ = _ipc_host(qtbot)
+    server.protocol_mismatch = True
+    host.show()
+    with pytest.raises(RuntimeError, match="input protocol mismatch"):
+        host._on_tick()
+    assert engine.stop_calls == 1
+
+
+def test_no_ipc_connection_past_deadline_raises(qtbot) -> None:
+    reader = _Reader()
+    now = [0.0]  # showEvent arms both deadlines from now[0]; the tick reads a later value
+    host, engine, _, server, _ = _ipc_host(qtbot, reader=reader)
+    host._clock = lambda: now[0]  # type: ignore[assignment]
+    host.show()                    # _deadline = 10.0, _ipc_deadline = 10.0
+    reader.try_open()
+    reader.set_frame(counter=1, byte=0x20)  # frames flowing, but IPC never connects
+    now[0] = 100.0                 # well past _ipc_deadline
+    with pytest.raises(RuntimeError, match="engine did not connect input"):
+        host._on_tick()
+    assert engine.stop_calls == 1
+
+
+def test_normal_disconnect_after_play_does_not_raise_handshake_timeout(qtbot) -> None:
+    """Spec §12: the 'engine did not connect input' guard is for a child that
+
+    NEVER completes HELLO. A normal DOOM quit after >10 s of play (socket EOF,
+    is_connected -> False) must fall straight through, not raise.
+    """
+    reader = _Reader()
+    now = [0.0]
+    host, engine, _, server, _ = _ipc_host(qtbot, reader=reader)
+    host._clock = lambda: now[0]  # type: ignore[assignment]
+    host.show()                    # arms _ipc_deadline = 10.0
+    reader.try_open()
+    reader.set_frame(counter=1, byte=0x20)
+    server.is_connected = True
+    host._on_tick()                # latch: _ipc_ever_connected = True
+    assert host._ipc_ever_connected is True
+    server.is_connected = False    # child quit -> socket EOF, never nulled
+    now[0] = 100.0                  # well past _ipc_deadline
+    host._on_tick()                # must NOT raise
+    assert engine.stop_calls == 0
+
+
+def test_hideevent_does_not_resume_an_already_paused_game(qtbot) -> None:
+    """I4: concealing a paused game must not send a second DISCRETE PAUSE."""
+    host, _, _, server, pipeline = _ipc_host(qtbot)
+    real_toggle = pipeline.toggle_pause
+    pipeline.toggle_pause = (  # type: ignore[assignment]
+        lambda: server.sent.append(Message.discrete(20)) or real_toggle()
+    )
+    host.show()
+    pipeline.toggle_pause()  # game is now "paused" (one DISCRETE PAUSE)
+    before = sum(1 for m in server.sent if getattr(m, "code", None) == 20)
+    host.hide()
+    after = sum(1 for m in server.sent if getattr(m, "code", None) == 20)
+    assert after == before          # the hide sent NO new DISCRETE PAUSE
+    assert pipeline.paused is False  # released, not toggled back on
+
+
+def test_hideevent_pauses_a_running_game_exactly_once(qtbot) -> None:
+    host, _, _, server, pipeline = _ipc_host(qtbot)
+    real_toggle = pipeline.toggle_pause
+    pipeline.toggle_pause = (  # type: ignore[assignment]
+        lambda: server.sent.append(Message.discrete(20)) or real_toggle()
+    )
+    host.show()
+    host.hide()
+    assert sum(1 for m in server.sent if getattr(m, "code", None) == 20) == 1
+
+
+def test_child_death_in_tick_releases_all_and_closes_the_server(qtbot) -> None:
+    """§4 step 10 completeness: engine.poll() not None -> release_all + server.close."""
+    reader = _Reader()
+    host, engine, _, server, pipeline = _ipc_host(qtbot, reader=reader)
+    host.show()
+    reader.try_open()
+    reader.set_frame(counter=3, byte=0x30)
+    engine._return = 0  # child has exited
+    host._on_tick()
+    assert pipeline.releases >= 1
+    assert server.closed == 1
+
+
+def test_pause_overlay_visibility_follows_pipeline_paused(qtbot) -> None:
+    host, _, _, _, pipeline = _ipc_host(qtbot)
+    host.show()
+    overlay = host.findChild(QWidget, "pause_overlay")
+    assert overlay is not None
+    pipeline.paused = True
+    host._on_tick()  # _sync_pause_overlay runs before the frame-wait early return
+    assert overlay.isVisibleTo(host) is True
+
+
+def test_pause_overlay_paints_without_crashing_after_event_processing(qtbot) -> None:
+    """Regression: the overlay paintEvent segfaulted under a headless xvfb backing
+    store when QPainter(self) handed back an inactive painter (Linux CI, PySide6 6.11)."""
+    host, _, _, _, pipeline = _ipc_host(qtbot)
+    host.show()
+    pipeline.paused = True
+    host._on_tick()  # makes the overlay visible -> queues a paint event
+    qtbot.wait(20)  # flush the event loop -> paintEvent runs on the real backing store
+    overlay = host.findChild(QWidget, "pause_overlay")
+    overlay.grab()  # force a synchronous repaint; must not crash or raise
+
+
+def test_hideevent_releases_all_pauses_and_shows_overlay(qtbot) -> None:
+    host, _, _, _, pipeline = _ipc_host(qtbot)
+    host.show()
+    host.hide()
+    assert pipeline.releases >= 1
+    assert pipeline.paused is True
+    # host is hidden, so isVisible() is False; isVisibleTo(host) reflects the overlay's own flag
+    assert host.findChild(QWidget, "pause_overlay").isVisibleTo(host) is True
+
+
+def test_showevent_after_start_unpauses_and_hides_overlay(qtbot) -> None:
+    host, _, _, _, pipeline = _ipc_host(qtbot)
+    host.show()
+    host.hide()          # -> paused
+    host.show()           # restart branch
+    assert pipeline.paused is False
+    assert host.findChild(QWidget, "pause_overlay").isVisibleTo(host) is False
+
+
+def test_cleanup_order_includes_pipeline_release_and_server_close(qtbot) -> None:
+    order: list[str] = []
+    host, engine, reader, server, pipeline = _ipc_host(qtbot)
+    pipeline.release_all = lambda: order.append("release")  # type: ignore[assignment]
+    server.close = lambda: order.append("server")           # type: ignore[assignment]
+    reader.close = lambda: order.append("reader")           # type: ignore[assignment]
+    engine.stop = lambda: order.append("engine")            # type: ignore[assignment]
+    host.cleanup()
+    assert order == ["release", "server", "reader", "engine"]
+    host.cleanup()  # idempotent: pipeline and server are None now, nothing re-runs
+    assert order == ["release", "server", "reader", "engine"]

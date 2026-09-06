@@ -1,4 +1,4 @@
-"""Fetch Crispy Doom at a pinned tag, apply the frame-export patch, and build it.
+"""Fetch Crispy Doom at a pinned tag, apply the DOOMed Prism patch series, and build it.
 
 The pin in ``crispy-doom.lock`` is enforced, not merely recorded:
 
@@ -28,7 +28,10 @@ from pathlib import Path
 _ROOT = Path(__file__).resolve().parents[1]
 _DEFAULT_BUILD_DIR = _ROOT / "build" / "crispy"
 _DEFAULT_LOCK = _ROOT / "crispy-doom.lock"
-_DEFAULT_PATCH = _ROOT / "patches" / "crispy-doom-fb-export.diff"
+PATCHES = (
+    _ROOT / "patches" / "crispy-doom-fb-export.diff",
+    _ROOT / "patches" / "crispy-doom-ipc-input.diff",
+)
 _MARKER = ".doomed-prism-applied"
 _TARBALL_TIMEOUT_S = 120
 
@@ -116,18 +119,30 @@ def verify_tarball(lock: Lock, *, fetch=_default_fetch) -> None:
 
 
 def plan_commands(
-    lock: Lock, *, build_dir: Path, patch: Path, check_only: bool
+    lock: Lock,
+    *,
+    build_dir: Path,
+    patches: tuple[Path, ...] = PATCHES,
+    check_only: bool,
 ) -> list[list[str]]:
+    git = ["git", "-C", str(build_dir)]
     commands: list[list[str]] = []
     if not (build_dir / ".git").exists():
         commands.append(
             ["git", "clone", "--branch", lock.tag, lock.repo, str(build_dir)]
         )
     if check_only:
-        commands.append(["git", "-C", str(build_dir), "apply", "--check", str(patch)])
+        commands.append(git + ["reset", "--hard", lock.commit])
+        commands.append(git + ["clean", "-fd", "--", "src/"])
+        commands.append(git + ["apply", str(patches[0])])
+        for patch in patches[1:]:
+            commands.append(git + ["apply", "--check", str(patch)])
         return commands
     if not (build_dir / _MARKER).exists():
-        commands.append(["git", "-C", str(build_dir), "apply", str(patch)])
+        commands.append(git + ["reset", "--hard", lock.commit])
+        commands.append(git + ["clean", "-fd", "--", "src/"])
+        for patch in patches:
+            commands.append(git + ["apply", str(patch)])
     commands.append(
         ["cmake", "-S", str(build_dir), "-B", str(build_dir / "build"),
          "-DCMAKE_BUILD_TYPE=Release"]
@@ -143,7 +158,7 @@ def run(
     fetch=_default_fetch,
     _build_dir: Path | None = None,
     _lock_path: Path | None = None,
-    _patch: Path | None = None,
+    _patches: tuple[Path, ...] | None = None,
 ) -> int:
     parser = argparse.ArgumentParser(prog="build_crispy")
     parser.add_argument(
@@ -161,7 +176,7 @@ def run(
 
     build_dir = _build_dir or _DEFAULT_BUILD_DIR
     lock_path = _lock_path or _DEFAULT_LOCK
-    patch = _patch or _DEFAULT_PATCH
+    patches = _patches or PATCHES
 
     if args.clean:
         if build_dir.exists():
@@ -170,8 +185,10 @@ def run(
 
     lock = load_lock(lock_path)
     commands = plan_commands(
-        lock, build_dir=build_dir, patch=patch, check_only=args.check
+        lock, build_dir=build_dir, patches=patches, check_only=args.check
     )
+    git = ["git", "-C", str(build_dir)]
+    last_apply = git + ["apply", str(patches[-1])]
 
     # Execute the optional clone first, then enforce the pin before anything
     # touches the patch or the build.
@@ -193,12 +210,22 @@ def run(
         print(str(error), file=sys.stderr)
         return 1
 
+    # A real `git reset --hard` (every `--check` run, and any marker-absent
+    # build) leaves the checkout only partially patched. The apply marker lives
+    # outside `src/`, so neither the reset nor `clean -fd -- src/` removes it --
+    # a later plain build would then trust the stale marker and skip the whole
+    # restore+apply block, building a patch-1-only tree. Drop it up front so the
+    # next real build does the full restore+apply (a successful build re-writes
+    # the marker after the last patch applies, as before).
+    if any(cmd[-3:] == ["reset", "--hard", lock.commit] for cmd in pending):
+        (build_dir / _MARKER).unlink(missing_ok=True)
+
     for command in pending:
         result = runner(command, cwd=str(_ROOT))
         if getattr(result, "returncode", 0) != 0:
             print(f"command failed: {' '.join(command)}", file=sys.stderr)
             return 1
-        if command[:4] == ["git", "-C", str(build_dir), "apply"] and "--check" not in command:
+        if not args.check and command == last_apply:
             build_dir.mkdir(parents=True, exist_ok=True)
             (build_dir / _MARKER).write_text("1", encoding="utf-8")
 
