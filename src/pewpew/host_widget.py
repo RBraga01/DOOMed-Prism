@@ -152,6 +152,7 @@ else:
             self._server: "IpcServer | None" = ipc_server
             self._pipeline: "InputPipeline | None" = input_pipeline
             self._ipc_deadline: float = 0.0
+            self._ipc_ever_connected = False
 
             self.setFixedSize(self._HOST_WIDTH, self._HOST_HEIGHT)
             self.setAutoFillBackground(False)
@@ -214,9 +215,12 @@ else:
             self._timer.stop()
             if self._shutdown_requested or not self._started:
                 return
+            # Capture the pause state BEFORE release_all() clears it, so an
+            # already-paused game is not resumed by a second DISCRETE PAUSE.
+            was_paused = self._pipeline.paused if self._pipeline is not None else False
             if self._pipeline is not None:
                 self._pipeline.release_all()
-            if self._pipeline is not None and not self._pipeline.paused:
+            if self._pipeline is not None and not was_paused:
                 self._pipeline.toggle_pause()
             self._sync_pause_overlay()
 
@@ -227,6 +231,8 @@ else:
         def _on_tick(self) -> None:
             if self._server is not None:
                 self._server.poll()
+                if self._server.is_connected:
+                    self._ipc_ever_connected = True
             self._sync_pause_overlay()
             if self._server is not None and self._server.protocol_mismatch:
                 self._cleanup_after_startup_failure()
@@ -258,6 +264,7 @@ else:
             if (
                 self._server is not None
                 and not self._server.is_connected
+                and not self._ipc_ever_connected
                 and self._seen_frame
                 and self._clock() > self._ipc_deadline
             ):
@@ -269,6 +276,11 @@ else:
                 self.viewport.update()
             if self._engine.poll() is not None:
                 self._timer.stop()
+                # §4 step 10: the child is gone — nothing to send, socket is gone.
+                if self._pipeline is not None:
+                    self._pipeline.release_all()
+                if self._server is not None:
+                    self._server.close()
 
         def _on_ipc_disconnect(self) -> None:
             if self._pipeline is not None:

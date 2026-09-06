@@ -22,6 +22,7 @@ except ImportError as error:
 
 from pewpew.framebuffer import STRIDE, SLOT_BYTES, Frame, FrameSegmentError
 from pewpew.host_widget import DoomHostWidget
+from pewpew.ipc.protocol import Message
 
 
 class _Engine:
@@ -339,6 +340,68 @@ def test_no_ipc_connection_past_deadline_raises(qtbot) -> None:
     with pytest.raises(RuntimeError, match="engine did not connect input"):
         host._on_tick()
     assert engine.stop_calls == 1
+
+
+def test_normal_disconnect_after_play_does_not_raise_handshake_timeout(qtbot) -> None:
+    """Spec §12: the 'engine did not connect input' guard is for a child that
+
+    NEVER completes HELLO. A normal DOOM quit after >10 s of play (socket EOF,
+    is_connected -> False) must fall straight through, not raise.
+    """
+    reader = _Reader()
+    now = [0.0]
+    host, engine, _, server, _ = _ipc_host(qtbot, reader=reader)
+    host._clock = lambda: now[0]  # type: ignore[assignment]
+    host.show()                    # arms _ipc_deadline = 10.0
+    reader.try_open()
+    reader.set_frame(counter=1, byte=0x20)
+    server.is_connected = True
+    host._on_tick()                # latch: _ipc_ever_connected = True
+    assert host._ipc_ever_connected is True
+    server.is_connected = False    # child quit -> socket EOF, never nulled
+    now[0] = 100.0                  # well past _ipc_deadline
+    host._on_tick()                # must NOT raise
+    assert engine.stop_calls == 0
+
+
+def test_hideevent_does_not_resume_an_already_paused_game(qtbot) -> None:
+    """I4: concealing a paused game must not send a second DISCRETE PAUSE."""
+    host, _, _, server, pipeline = _ipc_host(qtbot)
+    real_toggle = pipeline.toggle_pause
+    pipeline.toggle_pause = (  # type: ignore[assignment]
+        lambda: server.sent.append(Message.discrete(20)) or real_toggle()
+    )
+    host.show()
+    pipeline.toggle_pause()  # game is now "paused" (one DISCRETE PAUSE)
+    before = sum(1 for m in server.sent if getattr(m, "code", None) == 20)
+    host.hide()
+    after = sum(1 for m in server.sent if getattr(m, "code", None) == 20)
+    assert after == before          # the hide sent NO new DISCRETE PAUSE
+    assert pipeline.paused is False  # released, not toggled back on
+
+
+def test_hideevent_pauses_a_running_game_exactly_once(qtbot) -> None:
+    host, _, _, server, pipeline = _ipc_host(qtbot)
+    real_toggle = pipeline.toggle_pause
+    pipeline.toggle_pause = (  # type: ignore[assignment]
+        lambda: server.sent.append(Message.discrete(20)) or real_toggle()
+    )
+    host.show()
+    host.hide()
+    assert sum(1 for m in server.sent if getattr(m, "code", None) == 20) == 1
+
+
+def test_child_death_in_tick_releases_all_and_closes_the_server(qtbot) -> None:
+    """§4 step 10 completeness: engine.poll() not None -> release_all + server.close."""
+    reader = _Reader()
+    host, engine, _, server, pipeline = _ipc_host(qtbot, reader=reader)
+    host.show()
+    reader.try_open()
+    reader.set_frame(counter=3, byte=0x30)
+    engine._return = 0  # child has exited
+    host._on_tick()
+    assert pipeline.releases >= 1
+    assert server.closed == 1
 
 
 def test_pause_overlay_visibility_follows_pipeline_paused(qtbot) -> None:
