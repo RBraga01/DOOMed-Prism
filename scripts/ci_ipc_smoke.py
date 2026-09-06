@@ -18,12 +18,14 @@ _ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_ROOT / "src"))
 
 from pewpew.framebuffer import FrameReader  # noqa: E402
+from pewpew.input.actions import Action  # noqa: E402
 from pewpew.ipc.protocol import Message  # noqa: E402
 from pewpew.ipc.server import IpcServer  # noqa: E402
 
 SOCKET_PATH = "/tmp/doomed-prism-ipc-ci.sock"
 FB_NAME = "doomed-prism-fb-ipc-ci"
 CONNECT_TIMEOUT_S = 30.0
+OPEN_TIMEOUT_S = 30.0
 FLOOD_FRAMES = 500
 
 
@@ -83,13 +85,20 @@ def main() -> int:
         print(f"socket {Path(SOCKET_PATH).name}: present, handshake complete")
 
         reader = FrameReader(FB_NAME)
-        while not reader.try_open():
+        open_deadline = time.monotonic() + OPEN_TIMEOUT_S
+        while time.monotonic() < open_deadline:
+            if proc.poll() is not None:
+                _fail(f"engine exited early ({proc.returncode}) before the framebuffer opened")
+            if reader.try_open():
+                break
             time.sleep(0.05)
+        else:
+            _fail("framebuffer segment never became readable")
         counters: set[int] = set()
         for i in range(FLOOD_FRAMES):
-            server.send(Message.turn(4, i % 40))
+            server.send(Message.turn(int(Action.TURN_RIGHT), i % 40))
             if i % 50 == 0:
-                server.send(Message.pulse(10))
+                server.send(Message.pulse(int(Action.FIRE)))
             server.poll()
             f = reader.latest()
             if f is not None:

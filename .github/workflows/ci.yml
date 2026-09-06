@@ -116,6 +116,7 @@ jobs:
           echo "::notice title=POSIX runtime validation::shm_open path exercised on Linux x86_64 (segment + advancing frame_counter + clean teardown)"
 
       - name: IPC runtime smoke test
+        timeout-minutes: 15
         run: |
           set -o pipefail
           xvfb-run -a python scripts/ci_ipc_smoke.py \
