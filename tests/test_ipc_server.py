@@ -8,7 +8,7 @@ import sys
 import pytest
 
 from fakes.fake_ipc import FakeIpcClient
-from pewpew.ipc.protocol import IPC_PROTOCOL_VERSION, Message, MessageType
+from pewpew.ipc.protocol import IPC_PROTOCOL_VERSION, Message
 from pewpew.ipc.server import IpcServer
 
 

@@ -6,7 +6,6 @@ import socket
 import struct
 
 from pewpew.ipc.protocol import (
-    IPC_FRAME_SIZE,
     IPC_PROTOCOL_VERSION,
     Message,
     MessageType,
