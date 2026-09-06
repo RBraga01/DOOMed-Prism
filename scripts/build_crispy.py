@@ -1,4 +1,4 @@
-"""Fetch Crispy Doom at a pinned tag, apply the frame-export patch, and build it.
+"""Fetch Crispy Doom at a pinned tag, apply the DOOMed Prism patch series, and build it.
 
 The pin in ``crispy-doom.lock`` is enforced, not merely recorded:
 
@@ -209,6 +209,16 @@ def run(
     except LockVerificationError as error:
         print(str(error), file=sys.stderr)
         return 1
+
+    # A real `git reset --hard` (every `--check` run, and any marker-absent
+    # build) leaves the checkout only partially patched. The apply marker lives
+    # outside `src/`, so neither the reset nor `clean -fd -- src/` removes it --
+    # a later plain build would then trust the stale marker and skip the whole
+    # restore+apply block, building a patch-1-only tree. Drop it up front so the
+    # next real build does the full restore+apply (a successful build re-writes
+    # the marker after the last patch applies, as before).
+    if any(cmd[-3:] == ["reset", "--hard", lock.commit] for cmd in pending):
+        (build_dir / _MARKER).unlink(missing_ok=True)
 
     for command in pending:
         result = runner(command, cwd=str(_ROOT))

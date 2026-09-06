@@ -403,6 +403,57 @@ def test_run_writes_the_marker_only_after_the_last_patch_applies(tmp_path: Path)
     assert not (build_dir / build_crispy._MARKER).exists()
 
 
+def test_check_run_clears_a_stale_apply_marker(tmp_path: Path) -> None:
+    """--check does a real `git apply p1`; the marker must not survive it."""
+    build_dir = tmp_path / "build" / "crispy"
+    (build_dir / ".git").mkdir(parents=True)
+    (build_dir / build_crispy._MARKER).write_text("1", encoding="utf-8")
+    p1, p2 = tmp_path / "p1.diff", tmp_path / "p2.diff"
+
+    exit_code = build_crispy.run(
+        ["--check"],
+        runner=_make_runner([], head=_COMMIT),
+        fetch=_fake_fetch(),
+        _build_dir=build_dir,
+        _lock_path=_write_lock(tmp_path),
+        _patches=(p1, p2),
+    )
+    assert exit_code == 0
+    assert not (build_dir / build_crispy._MARKER).exists()
+
+
+def test_check_then_plain_build_re_runs_the_full_apply(tmp_path: Path) -> None:
+    """After --check clears the marker, the next plain build restores+applies."""
+    build_dir = tmp_path / "build" / "crispy"
+    (build_dir / ".git").mkdir(parents=True)
+    (build_dir / build_crispy._MARKER).write_text("1", encoding="utf-8")
+    p1, p2 = tmp_path / "p1.diff", tmp_path / "p2.diff"
+    lock_path = _write_lock(tmp_path)
+
+    build_crispy.run(
+        ["--check"],
+        runner=_make_runner([], head=_COMMIT),
+        fetch=_fake_fetch(),
+        _build_dir=build_dir,
+        _lock_path=lock_path,
+        _patches=(p1, p2),
+    )
+    assert not (build_dir / build_crispy._MARKER).exists()
+
+    calls: list[list[str]] = []
+    build_crispy.run(
+        [],
+        runner=_make_runner(calls, head=_COMMIT),
+        fetch=_fake_fetch(),
+        _build_dir=build_dir,
+        _lock_path=lock_path,
+        _patches=(p1, p2),
+    )
+    assert ["git", "-C", str(build_dir), "apply", str(p1)] in calls
+    joined = [" ".join(c) for c in calls]
+    assert any("cmake" in c and "--build" in c for c in joined)
+
+
 def test_run_writes_the_marker_once_when_the_series_applies(tmp_path: Path) -> None:
     build_dir = tmp_path / "build" / "crispy"
     (build_dir / ".git").mkdir(parents=True)
@@ -422,10 +473,3 @@ def test_run_writes_the_marker_once_when_the_series_applies(tmp_path: Path) -> N
     joined = [" ".join(c) for c in calls]
     assert any(c.endswith("reset --hard " + _COMMIT) for c in joined)
     assert any(c.endswith("clean -fd -- src/") for c in joined)
-
-
-def _ok():
-    class _R:
-        returncode = 0
-
-    return _R()
