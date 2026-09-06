@@ -54,3 +54,14 @@ def test_c_patch_constants_match_the_python_enums() -> None:
     assert defs["MT_DISCRETE"] == MessageType.DISCRETE
     assert defs["MT_TURN"] == MessageType.TURN
     assert defs["MT_BYE"] == MessageType.BYE
+
+    # Numeric couplings that would misbehave silently if they drift.
+    from pewpew.input.actions import TURN_MAX_MOUSE_DELTA
+    from pewpew.ipc.protocol import IPC_FRAME_SIZE, IPC_PROTOCOL_VERSION
+
+    frame_size = int(re.search(r"#define\s+IPC_FRAME_SIZE\s+(\d+)", diff).group(1))
+    assert frame_size == 8 == IPC_FRAME_SIZE
+    proto = int(re.search(r"#define\s+IPC_PROTOCOL_VERSION\s+(\d+)", diff).group(1))
+    assert proto == IPC_PROTOCOL_VERSION
+    turn_clamp = int(re.search(r"#define\s+IPC_TURN_CLAMP\s+(\d+)", diff).group(1))
+    assert turn_clamp == TURN_MAX_MOUSE_DELTA == 40

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from fakes.fake_fire import FakeSpokenFireSource
 from fakes.fake_input import FakeInputSource
 from pewpew.input.pipeline import InputPipeline
@@ -80,3 +78,4 @@ def test_a_raising_send_does_not_propagate_out_of_tick() -> None:
     pipe = InputPipeline(src, flaky_send)
     for i in range(6):
         pipe.tick(now=i * 0.05)  # must not raise
+    assert calls["n"] > 2  # the raising branch (n > 2) was actually exercised
