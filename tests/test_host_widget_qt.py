@@ -339,3 +339,45 @@ def test_no_ipc_connection_past_deadline_raises(qtbot) -> None:
     with pytest.raises(RuntimeError, match="engine did not connect input"):
         host._on_tick()
     assert engine.stop_calls == 1
+
+
+def test_pause_overlay_visibility_follows_pipeline_paused(qtbot) -> None:
+    host, _, _, _, pipeline = _ipc_host(qtbot)
+    host.show()
+    overlay = host.findChild(QWidget, "pause_overlay")
+    assert overlay is not None
+    pipeline.paused = True
+    host._on_tick()  # _sync_pause_overlay runs before the frame-wait early return
+    assert overlay.isVisibleTo(host) is True
+
+
+def test_hideevent_releases_all_pauses_and_shows_overlay(qtbot) -> None:
+    host, _, _, _, pipeline = _ipc_host(qtbot)
+    host.show()
+    host.hide()
+    assert pipeline.releases >= 1
+    assert pipeline.paused is True
+    # host is hidden, so isVisible() is False; isVisibleTo(host) reflects the overlay's own flag
+    assert host.findChild(QWidget, "pause_overlay").isVisibleTo(host) is True
+
+
+def test_showevent_after_start_unpauses_and_hides_overlay(qtbot) -> None:
+    host, _, _, _, pipeline = _ipc_host(qtbot)
+    host.show()
+    host.hide()          # -> paused
+    host.show()           # restart branch
+    assert pipeline.paused is False
+    assert host.findChild(QWidget, "pause_overlay").isVisibleTo(host) is False
+
+
+def test_cleanup_order_includes_pipeline_release_and_server_close(qtbot) -> None:
+    order: list[str] = []
+    host, engine, reader, server, pipeline = _ipc_host(qtbot)
+    pipeline.release_all = lambda: order.append("release")  # type: ignore[assignment]
+    server.close = lambda: order.append("server")           # type: ignore[assignment]
+    reader.close = lambda: order.append("reader")           # type: ignore[assignment]
+    engine.stop = lambda: order.append("engine")            # type: ignore[assignment]
+    host.cleanup()
+    assert order == ["release", "server", "reader", "engine"]
+    host.cleanup()  # idempotent: pipeline and server are None now, nothing re-runs
+    assert order == ["release", "server", "reader", "engine"]

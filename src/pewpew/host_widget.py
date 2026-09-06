@@ -35,7 +35,14 @@ class _Reader(Protocol):
 
 try:  # Keep non-desktop commands importable without the optional Qt dependency.
     from PySide6.QtCore import Qt, QTimer
-    from PySide6.QtGui import QCloseEvent, QHideEvent, QImage, QPainter, QShowEvent
+    from PySide6.QtGui import (
+        QCloseEvent,
+        QColor,
+        QHideEvent,
+        QImage,
+        QPainter,
+        QShowEvent,
+    )
     from PySide6.QtWidgets import QApplication, QWidget
 
     from pewpew.input.pipeline import InputPipeline
@@ -84,6 +91,32 @@ else:
             painter.drawImage(self.rect(), image)
             painter.end()
 
+    class _PauseOverlay(QWidget):
+        """A translucent child that shows PAUSED over the viewport while input is held."""
+
+        _EMITTED_LIGHT = QColor(0x66, 0xFF, 0x99, 0xFF)
+        _SCRIM = QColor(0x00, 0x00, 0x00, 0x99)
+
+        def __init__(self, parent: QWidget) -> None:
+            super().__init__(parent)
+            self.setObjectName("pause_overlay")
+            self.setAttribute(Qt.WA_NoSystemBackground, True)
+            self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+            self.setGeometry(parent.viewport.geometry())
+            self.setVisible(False)
+
+        def paintEvent(self, event: object) -> None:
+            del event
+            painter = QPainter(self)
+            painter.fillRect(self.rect(), self._SCRIM)
+            font = painter.font()
+            font.setPointSize(48)
+            font.setBold(True)
+            painter.setFont(font)
+            painter.setPen(self._EMITTED_LIGHT)
+            painter.drawText(self.rect(), Qt.AlignCenter, "PAUSED")
+            painter.end()
+
     class DoomHostWidget(QWidget):
         """A transparent 640x640 surface painting Doom frames into its viewport."""
 
@@ -116,8 +149,8 @@ else:
             self._seen_frame = False
             self._injected_server = ipc_server
             self._injected_pipeline = input_pipeline
-            self._server: "IpcServer | None" = None
-            self._pipeline: "InputPipeline | None" = None
+            self._server: "IpcServer | None" = ipc_server
+            self._pipeline: "InputPipeline | None" = input_pipeline
             self._ipc_deadline: float = 0.0
 
             self.setFixedSize(self._HOST_WIDTH, self._HOST_HEIGHT)
@@ -130,6 +163,8 @@ else:
             self.viewport.setGeometry(0, 80, 640, 480)
             if self._reader is not None:
                 self.viewport.set_reader(self._reader)
+
+            self._pause_overlay = _PauseOverlay(self)
 
             self._timer = QTimer(self)
             self._timer.setInterval(self._REPAINT_INTERVAL_MS)
@@ -144,6 +179,11 @@ else:
             if self._shutdown_requested:
                 return
             if self._started:
+                if self._pipeline is not None and self._pipeline.paused:
+                    self._pipeline.toggle_pause()
+                if self._pipeline is not None:
+                    self._pipeline.release_all()
+                self._sync_pause_overlay()
                 self._timer.start()
                 return
             if self._config is None and self._engine is None:
@@ -172,6 +212,13 @@ else:
         def hideEvent(self, event: QHideEvent) -> None:
             super().hideEvent(event)
             self._timer.stop()
+            if self._shutdown_requested or not self._started:
+                return
+            if self._pipeline is not None:
+                self._pipeline.release_all()
+            if self._pipeline is not None and not self._pipeline.paused:
+                self._pipeline.toggle_pause()
+            self._sync_pause_overlay()
 
         def closeEvent(self, event: QCloseEvent) -> None:
             self.cleanup()
@@ -180,6 +227,7 @@ else:
         def _on_tick(self) -> None:
             if self._server is not None:
                 self._server.poll()
+            self._sync_pause_overlay()
             if self._server is not None and self._server.protocol_mismatch:
                 self._cleanup_after_startup_failure()
                 raise RuntimeError("input protocol mismatch")
@@ -228,10 +276,29 @@ else:
             if self._server is not None:
                 self._server.close()
 
+        def _sync_pause_overlay(self) -> None:
+            self._pause_overlay.setVisible(
+                self._pipeline.paused if self._pipeline is not None else False
+            )
+
         def cleanup(self) -> None:
             self._shutdown_requested = True
             self._timer.stop()
             errors: list[Exception] = []
+            if self._pipeline is not None:
+                try:
+                    self._pipeline.release_all()
+                except Exception as error:  # noqa: BLE001 - retried on next call
+                    errors.append(error)
+                else:
+                    self._pipeline = None
+            if self._server is not None:
+                try:
+                    self._server.close()
+                except Exception as error:  # noqa: BLE001 - retried on next call
+                    errors.append(error)
+                else:
+                    self._server = None
             if self._reader is not None:
                 try:
                     self._reader.close()
