@@ -414,6 +414,18 @@ def test_pause_overlay_visibility_follows_pipeline_paused(qtbot) -> None:
     assert overlay.isVisibleTo(host) is True
 
 
+def test_pause_overlay_paints_without_crashing_after_event_processing(qtbot) -> None:
+    """Regression: the overlay paintEvent segfaulted under a headless xvfb backing
+    store when QPainter(self) handed back an inactive painter (Linux CI, PySide6 6.11)."""
+    host, _, _, _, pipeline = _ipc_host(qtbot)
+    host.show()
+    pipeline.paused = True
+    host._on_tick()  # makes the overlay visible -> queues a paint event
+    qtbot.wait(20)  # flush the event loop -> paintEvent runs on the real backing store
+    overlay = host.findChild(QWidget, "pause_overlay")
+    overlay.grab()  # force a synchronous repaint; must not crash or raise
+
+
 def test_hideevent_releases_all_pauses_and_shows_overlay(qtbot) -> None:
     host, _, _, _, pipeline = _ipc_host(qtbot)
     host.show()

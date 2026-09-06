@@ -107,15 +107,25 @@ else:
 
         def paintEvent(self, event: object) -> None:
             del event
-            painter = QPainter(self)
-            painter.fillRect(self.rect(), self._SCRIM)
-            font = painter.font()
-            font.setPointSize(48)
-            font.setBold(True)
-            painter.setFont(font)
-            painter.setPen(self._EMITTED_LIGHT)
-            painter.drawText(self.rect(), Qt.AlignCenter, "PAUSED")
-            painter.end()
+            if self.rect().isEmpty():
+                return
+            # Use begin()/isActive() rather than the QPainter(self) constructor:
+            # under a headless xvfb backing store the constructor can hand back an
+            # inactive painter whose fillRect() then segfaults on PySide6 6.11.
+            # begin() returns False on a not-ready paint device so we bail cleanly.
+            painter = QPainter()
+            if not painter.begin(self):
+                return
+            try:
+                painter.fillRect(self.rect(), self._SCRIM)
+                font = painter.font()
+                font.setPointSize(48)
+                font.setBold(True)
+                painter.setFont(font)
+                painter.setPen(self._EMITTED_LIGHT)
+                painter.drawText(self.rect(), Qt.AlignCenter, "PAUSED")
+            finally:
+                painter.end()
 
     class DoomHostWidget(QWidget):
         """A transparent 640x640 surface painting Doom frames into its viewport."""
