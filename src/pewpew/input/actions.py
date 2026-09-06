@@ -36,14 +36,10 @@ def _turn_value(magnitude: float) -> int:
     return max(0, min(TURN_MAX_MOUSE_DELTA, round(magnitude * TURN_MAX_MOUSE_DELTA)))
 
 
-def _quantum(magnitude: float) -> int:
-    return max(0, min(MAGNITUDE_STEPS, round(magnitude * MAGNITUDE_STEPS)))
-
-
 class ActionRouter:
     def __init__(self, sink: Callable[[Message], None]) -> None:
         self._sink = sink
-        self._held: dict[Action, int] = {}  # action -> last emitted quantum (MOVE uses 1)
+        self._held: dict[Action, int] = {}  # action -> 1 while held (MOVE and TURN)
 
     def set_held(self, held: frozenset[HeldAction]) -> None:
         incoming = {h.action: h.magnitude for h in held}
@@ -54,14 +50,16 @@ class ActionRouter:
         for action in sorted(incoming):
             magnitude = incoming[action]
             if action in _MOVE:
+                # On/off: one 10000 on the transition to held, one 0 on release.
                 if action not in self._held:
                     self._held[action] = 1
                     self._sink(Message.action(int(action), 10000))
             elif action in _TURN:
-                q = _quantum(magnitude)
-                if self._held.get(action) != q:
-                    self._held[action] = q
-                    self._sink(Message.turn(int(action), _turn_value(magnitude)))
+                # TURN is a one-shot ev_mouse delta the C side zeroes every tic,
+                # so a sustained turn needs a fresh frame on *every* call while
+                # the gaze is held (spec R6). Release still emits exactly one 0.
+                self._held[action] = 1
+                self._sink(Message.turn(int(action), _turn_value(magnitude)))
 
     def pulse(self, action: Action) -> None:
         self._sink(Message.pulse(int(action)))

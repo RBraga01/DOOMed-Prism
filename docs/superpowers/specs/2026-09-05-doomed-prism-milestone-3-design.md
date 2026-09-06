@@ -424,7 +424,7 @@ PewPew Engine process                              Crispy Doom process (patch se
 | --- | --- | --- | --- |
 | `pewpew.ipc.protocol` | Python | `Message` (frozen; `type`, `code: int`, `value: int`), `MessageType` enum, `encode(msg) -> bytes` (8 bytes), `decode(buf) -> (Message | None, bytes)`; `IpcProtocolError`; constants `IPC_PROTOCOL_VERSION = 1`, `IPC_FRAME_SIZE = 8`. Pure. Never imports `pewpew.input`. | `struct` (stdlib) |
 | `pewpew.ipc.server` | Python | `IpcServer(*, address_factory=default)`: `start() -> str`, `poll() -> None`, `send(Message) -> None`, `is_connected: bool`, `on_disconnect: Callable`, `close()`. Blocking socket, short send timeout, single client. Sole owner of the socket path (bind + unlink). | `socket` (stdlib), `pewpew.ipc.protocol` |
-| `pewpew.input.actions` | Python | `Action` enum (the sole `Action ↔ int` mapping, matching the §5 table), `HeldAction(action, magnitude)`, `ActionRouter(sink)`: `set_held(frozenset[HeldAction])`, `pulse(Action)`, `discrete(Action)`, `release_all()`. Quantises turn magnitude to `MAGNITUDE_STEPS`; emits a frame only when a quantised step or on/off state changes. Constants `MAGNITUDE_STEPS`, `TURN_MAX_MOUSE_DELTA`. Pure + sink. | `pewpew.ipc.protocol` |
+| `pewpew.input.actions` | Python | `Action` enum (the sole `Action ↔ int` mapping, matching the §5 table), `HeldAction(action, magnitude)`, `ActionRouter(sink)`: `set_held(frozenset[HeldAction])`, `pulse(Action)`, `discrete(Action)`, `release_all()`. An `ACTION` (`MOVE_*`) frame is emitted only on the on/off transition; a `TURN` frame is emitted on every `set_held` call while the turn is held (it is a one-shot mouse delta), with one `0` on release. Scales turn magnitude with `TURN_MAX_MOUSE_DELTA`. Constants `MAGNITUDE_STEPS`, `TURN_MAX_MOUSE_DELTA`. Pure + sink. | `pewpew.ipc.protocol` |
 | `pewpew.input.gaze` | Python | `GazeZoneMap(surface_w, surface_h, *, dead_zone=(180,150), turn_exponent=1.5)`: `resolve(x, y) -> frozenset[HeldAction]` (region → actions; raw float magnitude). `GazeFilter(*, dwell_s=0.15, grace_s=0.02, ema_alpha=0.4)`: `update(raw_set, now) -> frozenset[HeldAction]`. Pure; time via the `now` argument only. | `pewpew.input.actions` |
 | `pewpew.input.fire` | Python | `FireArbiter(*, debounce_s=0.12)`: `deliberate_action()`, `spoken_fire()`, `poll(now) -> bool`, `reset()`. `DeliberateActionSource` / `SpokenFireSource` protocols; `NullSpokenFireSource`. Pure; time via `poll(now)` only. | — |
 | `pewpew.input.source` | Python | `InputSource` protocol: `sample(now) -> InputSample`. `InputSample(gaze_xy: tuple[int,int] | None, activation_edge: bool, pause_edge: bool, debug_fire_edge: bool)`. `PrismInputSource` stub. | — |
@@ -453,9 +453,13 @@ commit.
    the empty set.
 5. `held = gaze_filter.update(raw, now)` — dwell-gated, grace-smoothed;
    `GazeZoneMap` gave raw floats, `GazeFilter` EMA-smooths the turn magnitude.
-6. `router.set_held(held)` — quantises each turn magnitude to `MAGNITUDE_STEPS`
-   and emits an `ACTION`/`TURN` frame only when a quantised step or an on/off
-   state changed.
+6. `router.set_held(held)` — for a held `MOVE_*` (`ACTION`) it emits a frame
+   only on the on/off transition (`10000` on hold, `0` on release, nothing in
+   between). For a held `TURN_*` it emits a `TURN` frame on **every** call while
+   the turn is held (matching the R6 action table: "`TURN` frame each tic"),
+   because `TURN` is a one-shot `ev_mouse` delta the C side zeroes each tic; a
+   single `0` frame is emitted once on release. Turn wire scaling is
+   `round(magnitude * TURN_MAX_MOUSE_DELTA)` clamped to `[0, TURN_MAX_MOUSE_DELTA]`.
 7. `if sample.activation_edge: fire.deliberate_action()`;
    `if spoken_fire.spoken_fire_edge() or sample.debug_fire_edge:
    fire.spoken_fire()`; `if fire.poll(now): router.pulse(FIRE)`.
@@ -911,13 +915,14 @@ a pre-connected `socketpair` injector.
   mismatch; a client close makes the next `poll()` fire `on_disconnect` exactly
   once; a `settimeout` send timeout is surfaced as a disconnect; `close()`
   unlinks the POSIX path and is idempotent.
-- **`pewpew.input.actions`.** `set_held` quantises turn magnitude to
-  `MAGNITUDE_STEPS` and emits a `TURN`/`ACTION` frame only when the quantised
-  step or on/off state changed (a sub-quantum magnitude change emits nothing);
-  the turn wire scaling (`round(magnitude * TURN_MAX_MOUSE_DELTA)`, clamped to
-  `[0, TURN_MAX_MOUSE_DELTA]`) is asserted for representative magnitudes
-  including `1.0` and an over-range guard; `MOVE_*` emit `value = 10000` on
-  hold, `0` on release, no analog stream; `pulse` / `discrete` emit one frame;
+- **`pewpew.input.actions`.** `set_held` emits an `ACTION` (`MOVE_*`) frame only
+  on the on/off transition, and a `TURN` frame on every call while the turn is
+  held (`TURN` is a one-shot mouse delta the C side zeroes each tic), with one
+  `0` frame on release; the turn wire scaling (`round(magnitude *
+  TURN_MAX_MOUSE_DELTA)`, clamped to `[0, TURN_MAX_MOUSE_DELTA]`) is asserted
+  for representative magnitudes including `1.0` and an over-range guard;
+  `MOVE_*` emit `value = 10000` on hold, `0` on release, no analog stream;
+  `pulse` / `discrete` emit one frame;
   `release_all` emits a `0`-value frame for every held action and nothing for
   already-released ones; the sink receives `Message` objects whose `code`
   matches the §5 table.

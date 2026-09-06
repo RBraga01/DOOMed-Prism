@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from pewpew.input.actions import (
-    MAGNITUDE_STEPS,
     TURN_MAX_MOUSE_DELTA,
     Action,
     ActionRouter,
@@ -33,17 +32,33 @@ def test_set_held_emits_move_forward_on_hold_then_release() -> None:
     ]
 
 
-def test_turn_emits_scaled_value_and_only_on_a_quantised_step_change() -> None:
+def test_turn_emits_a_frame_every_call_while_held() -> None:
+    """TURN is a one-shot mouse delta: a held gaze must re-send it every tick."""
     router, sent = _router()
     router.set_held(frozenset({HeldAction(Action.TURN_RIGHT, 1.0)}))
-    # round(0.99 * 20) == 20 — same bin as 1.0, so no new frame
+    # A near-identical magnitude must STILL produce a frame — not silence.
     router.set_held(frozenset({HeldAction(Action.TURN_RIGHT, 0.99)}))
-    router.set_held(frozenset({HeldAction(Action.TURN_RIGHT, 0.5)}))   # bin 10
-    router.set_held(frozenset())
+    router.set_held(frozenset({HeldAction(Action.TURN_RIGHT, 0.5)}))
+    router.set_held(frozenset())  # release
     assert sent == [
         Message.turn(Action.TURN_RIGHT, TURN_MAX_MOUSE_DELTA),
+        Message.turn(Action.TURN_RIGHT, round(0.99 * TURN_MAX_MOUSE_DELTA)),
         Message.turn(Action.TURN_RIGHT, round(0.5 * TURN_MAX_MOUSE_DELTA)),
         Message.turn(Action.TURN_RIGHT, 0),
+    ]
+    # exactly one TURN frame per non-release call, then one 0 on release
+    assert len([m for m in sent if m.value != 0]) == 3
+    assert [m.value for m in sent].count(0) == 1
+
+
+def test_move_held_across_many_calls_emits_one_hold_then_one_release() -> None:
+    router, sent = _router()
+    for _ in range(5):
+        router.set_held(frozenset({HeldAction(Action.MOVE_FORWARD, 1.0)}))
+    router.set_held(frozenset())
+    assert sent == [
+        Message.action(Action.MOVE_FORWARD, 10000),
+        Message.action(Action.MOVE_FORWARD, 0),
     ]
 
 
