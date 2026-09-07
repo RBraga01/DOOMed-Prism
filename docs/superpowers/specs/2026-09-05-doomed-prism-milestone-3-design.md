@@ -279,7 +279,7 @@ gone; `TURN_RESPONSE_EXPONENT` became the axis-shared `RESPONSE_EXPONENT`;
 | `OUTER_SATURATION` | `pewpew.input.gaze` | `0.95` | fraction of normalized space | `r` at or above this maps to full deflection; the live band is `[DEAD_ZONE_RADIUS, OUTER_SATURATION]` (R14) |
 | `RESPONSE_EXPONENT` | `pewpew.input.gaze` | `1.5` | — | shaping exponent applied to the rescaled magnitude; one curve for both axes (R14; was `TURN_RESPONSE_EXPONENT`) |
 | `MAGNITUDE_EMA_ALPHA` | `pewpew.input.gaze` | `0.4` | — | EMA weight for the gaze output vector `(fx, fy)` each tick while the raw vector is non-zero (R14) |
-| `RELEASE_EMA_ALPHA` | `pewpew.input.gaze` | `0.8` | — | EMA weight used instead while the raw vector is `(0, 0)`, so a look-back-to-centre stops in ~3 ticks not ~9 (R14) |
+| `RELEASE_EMA_ALPHA` | `pewpew.input.gaze` | `0.8` | — | EMA weight used instead while the raw vector is `(0, 0)`, so a look-back-to-centre reaches the first quantum in ~3 ticks and snaps to zero in ~5, versus ~9 / ~14 at `MAGNITUDE_EMA_ALPHA` (R14) |
 | `EMA_ZERO_EPSILON` | `pewpew.input.gaze` | `1e-3` | vector magnitude | below this the smoothed vector is snapped to `(0, 0)` so a rested stick stops emitting (R14) |
 | `MAGNITUDE_STEPS` | `pewpew.input.actions` | `20` | — | quantisation of a smoothed magnitude before it is sent, for both axes (quantum `1/MAGNITUDE_STEPS`) |
 | `MOVE_MAGNITUDE_SCALE` | `pewpew.input.actions` | `10000` | wire units | magnitude `1.0` maps to this `ACTION.value` (R14) |
@@ -319,17 +319,22 @@ recalibrated against `piu piu` user samples and one grammar string changes; no
 ### R14 — Gaze is a radial analog stick, not discrete zones (amendment, 2026-09-07)
 
 Supersedes: the forward-axis half of R5 and the movement half of R6; rewrites
-§7; edits §2 (patch-2 summary), §4 (units + data-flow steps 4–6 + step 9), §5
-(`ACTION.value` semantics + Functions), §9 (the simulator gaze coordinate
-space), §10 (the C `MOVE_*` translation + pump coalescing + the `forwardmove`
-fold), §12 and R9 (the C release-all wording), §13 (the CI-smoke assertion set),
-§14 and §17 (the patch-2 file allow-list and gate geometry), the R11 tunable
-list, and R1's one-line deliverable summary. The IPC boundary, the wire framing
-(R10), the transport (R2), the server (R3, §6), fire fusion (R7, §8), the
-`InputSource` *protocol* (R8 — only the simulator source's coordinate-space
-comment changes), the `release_all` *invariant* (R9 — "no held input survives a
-lifecycle transition"; only its stated C mechanism changes), and the `TURN`
-event path (the analog half of R5) are unchanged.
+§7; edits §1/R1 (deliverable summary), §2 (patch-2 summary), §3 (approach-A
+row), §4 (units + data-flow steps 4–6 + step 9 + the ASCII diagram), §5
+(`ACTION.value` semantics + Functions), §6 (the socket byte-rate note — a
+consequence of the per-tick streams, no interface change), §9 (the simulator
+gaze coordinate space + a public `widget` accessor), §10 (the C `MOVE_*`
+translation + pump coalescing + the `forwardmove` fold), §12 and R9 (the C
+release-all wording), §13 (the CI-smoke assertion set), §14 and §17 (the
+patch-2 file allow-list and gate geometry), §18 (exit criteria), and the R11
+tunable list. Unchanged: the IPC boundary, the wire framing (R10), the
+transport (R2), the `IpcServer` role and API (R3, §6 — only its byte-rate note
+moves), fire fusion (R7, §8), the `InputSource` *protocol* (R8 — the simulator
+source gains a `widget` accessor and its coordinate-space comment is
+corrected), the `release_all` *invariant* (R9 — "no held input survives a
+lifecycle transition"; only its stated C mechanism changes), and the
+`TURN → ev_mouse` translation itself (the pump now coalesces `TURN` frames but
+each still becomes one signed `ev_mouse` x-delta — the analog half of R5).
 
 **Why.** The 3a gate showed the discrete-zone model does not "feel as natural as
 looking around" (the user's acceptance bar). Three findings, one root cause
@@ -355,7 +360,7 @@ each, all dissolved by going radial:
   host viewport's real `(width, height)` (`host_widget` passes
   `surface=(self.viewport.width(), self.viewport.height())` explicitly — the
   640×640-vs-viewport mismatch is finding 1's root cause). `SimulatorInputSource`
-  reports `gaze_xy` in **viewport-local pixels**, clamped to `[0, w] × [0, h]`
+  reports `gaze_xy` in **viewport-local pixels**, clamped to `[0, w-1] × [0, h-1]`
   (§9). Raw offset `(dx, dy) = (gx − cx, gy − cy)`; per-axis normalize by the
   half-extent `nx = dx / (w / 2)`, `ny = dy / (h / 2)` (each in `[−1, 1]` at the
   edges). `r_raw = hypot(nx, ny)` (up to `√2` into a corner); `r = min(1.0,
@@ -386,7 +391,8 @@ each, all dissolved by going radial:
   rates: `MAGNITUDE_EMA_ALPHA` (default `0.4`) while the raw vector is non-zero
   (rising / in-band), and `RELEASE_EMA_ALPHA` (default `0.8`) while the raw
   vector is `(0.0, 0.0)` (gaze in the dead zone or `gaze_xy is None`), so a
-  look-back-to-centre stops in ~3 ticks rather than ~9. Below
+  look-back-to-centre reaches the first quantum in ~3 ticks and a zero output
+  in ~5, versus ~9 / ~14 at `MAGNITUDE_EMA_ALPHA`. Below
   `EMA_ZERO_EPSILON` (`1e-3`) the smoothed vector snaps to `(0.0, 0.0)`.
   `e_prev` starts at `(0.0, 0.0)` (no seed step) and `reset()` returns it there.
   Then map the smoothed `(ex, ey)` — still raw floats — to `HeldAction`s:
@@ -444,8 +450,8 @@ producer / ~35 Hz tic consumer) so turn would run ~1.8× hotter than the
 last-value-wins forward axis — reintroducing the exact imbalance R14 removes —
 and an unbounded `ev_mouse` burst after an engine stall can overflow the
 64-slot `D_PostEvent` ring and drop a queued `ev_keyup` / pause edge.
-Coalescing makes §4 data-flow step 6 ("the most recent `TURN` and `MOVE` frame
-apply once per pump") literally true and bounds `D_PostEvent` traffic.
+Coalescing makes §4 data-flow step 6 ("the most recent `TURN` and `ACTION`
+frame apply once per pump") literally true and bounds `D_PostEvent` traffic.
 
 *Forward staleness watchdog.* A per-pump counter resets on any `ACTION` frame
 (including the `0`) and increments otherwise; at `IPC_MOVE_STALE_PUMPS` (default
@@ -631,7 +637,7 @@ PewPew Engine process                              Crispy Doom process (patch se
     | InputSample(gaze_xy, activation_edge,             +- FB_Export_Init()          (patch 1, unchanged)
     |             pause_edge, debug_fire_edge)          +- IPC_Input_Init()          (patch 2) -- connects
     v                                                        DOOMED_PRISM_IPC_ADDR
-  InputPipeline.tick(now)                             d_loop.c BuildNewTic()  (once per built tic)
+  InputPipeline.tick(now)                             d_loop.c BuildNewTic()  (once per pump; >= built tics)
     +- GazeStick.resolve(x, y) -> (fx, fy)               +- IPC_Input_Pump()         (patch 2) -- drain +
     +- GazeVectorFilter (dual-rate EMA) -> {HeldAction}       coalesce: 1 ev_mouse dx + last ipc_forwardmove
     +- FireArbiter (click edge + spoken edge)          I_FinishUpdate
@@ -825,7 +831,8 @@ fixed; gaze recentering is a hardware-phase concern (R8).
 
 1. `dx, dy = x - cx, y - cy`.
 2. Per-axis normalize: `nx = dx / (surface_w / 2)`, `ny = dy / (surface_h / 2)`
-   — each in `[-1, 1]` at a viewport edge.
+   — each ≈ `±1.0` at the outermost reachable pixel (`w-1` / `h-1`, ~one part
+   in `w/2` short of exactly `1.0`; `OUTER_SATURATION` covers the gap).
 3. `r_raw = hypot(nx, ny)` (up to `√2` toward a corner); `r = min(1.0, r_raw)`.
    If `r <= dead_zone_radius` → return `(0.0, 0.0)` (the round dead zone — one
    magnitude test, so no axis fires while the other is dead). This early return
@@ -1041,7 +1048,10 @@ style; upstream notices in edited files preserved):
   clamp would let the two sum to `2 × MAXPLMOVE` and trip `TURBOTHRESHOLD`).
   ≈ 3 net lines, clearly commented, posts no event. Absent if mechanism 2/3 is
   chosen. This is the one patch-2 edit to a vanilla (non-patch-1, non-new)
-  line.
+  line. Note the IPC term bypasses DOOM's `speed` / always-run state — full
+  deflection is always `MOVE_MAX_FORWARDMOVE` (run), so a tester who toggles
+  always-run sees SDL-keyboard forward change but IPC forward unchanged. This
+  matches R14's fixed `10000 → 50` mapping and is intentional.
 - **No signal handling in patch 2.** On a SIGINT/SIGTERM stop the process dies
   before `I_ShutdownGraphics` runs, but the kernel closes the client socket fd
   as the process exits, so the server (PewPew) sees EOF, runs its own
@@ -1267,7 +1277,7 @@ a pre-connected `socketpair` injector.
   increases monotonically between (the curve); the returned direction matches
   the gaze direction (unit-vector check); a **corner** point (`hypot(nx, ny) >
   1`) still returns `hypot(fx, fy) == s` (≤ 1), *not* `√2·s` — the unclamped-norm
-  fix; `y = h` yields `ny → +1.0` (not `+1.33`), `y = 0` yields `−1.0`;
+  fix; `y = h-1` yields `ny ≈ +1.0` (not `+1.33`), `y = 0` yields `≈ −1.0`;
   `GazeStick(640, 480)` and `GazeStick(640, 640)` classify the same pixel
   differently. `__init__` rejects `outer_saturation <= dead_zone_radius` and
   `response_exponent <= 0`. `GazeVectorFilter.update` with an explicit `now`:
@@ -1558,6 +1568,12 @@ exits 0. `python -m pytest -q` green; `check_publication_safety.py --root .` and
 - Normal close: `cleanup()` runs stop-tick → release-all → server-close →
   reader-close → engine-stop with no exception; one PID gone; socket path
   removed.
+- **(R14) F3 semi-objective artifact.** During the movement checks, the tester
+  logs the outgoing `ACTION.value` and `TURN.value` streams (from
+  `ActionRouter`, or a debug print) to gitignored `artifacts/milestone-3/` and
+  attaches a quick plot of value vs gaze eccentricity — a curve rising 0 →
+  `MOVE_MAGNITUDE_SCALE` / `TURN_MAX_MOUSE_DELTA` shows proportionality without
+  a frame probe. Freedoom-only, no resolved paths.
 
 **Per-mode evidence.** Raw plus each available optical mode (Night, Day,
 Outdoors, Camera): one short local video or two time-separated captures showing
