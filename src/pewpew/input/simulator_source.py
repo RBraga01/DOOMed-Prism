@@ -38,8 +38,11 @@ class SimulatorInputSource(QObject):
             key = event.key()
             if key in (Qt.Key_Return, Qt.Key_Enter):
                 self._pause = True
-            elif key == Qt.Key_F9 and self._debug_fire:
+                return True  # consume it: an un-filtered Enter reaches the
+                # Raven framework and activates its focused button (exit).
+            if key == Qt.Key_F9 and self._debug_fire:
                 self._debug_edge = True
+                return True
         return False
 
     def sample(self, now: float) -> InputSample:

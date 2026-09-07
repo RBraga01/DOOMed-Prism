@@ -51,6 +51,29 @@ def test_return_key_sets_pause_edge_once(qtbot) -> None:
     assert src.sample(0.0).pause_edge is False
 
 
+def test_handled_keys_are_consumed_so_they_never_reach_the_raven_framework(qtbot) -> None:
+    w = _widget(qtbot)
+    src = SimulatorInputSource(w)
+    enter = QKeyEvent(QEvent.Type.KeyPress, Qt.Key_Return, Qt.NoModifier)
+    assert src.eventFilter(w, enter) is True
+    assert src.sample(0.0).pause_edge is True
+
+
+def test_unhandled_keys_pass_through(qtbot) -> None:
+    w = _widget(qtbot)
+    src = SimulatorInputSource(w)
+    other = QKeyEvent(QEvent.Type.KeyPress, Qt.Key_A, Qt.NoModifier)
+    assert src.eventFilter(w, other) is False
+
+
+def test_f9_passes_through_when_debug_fire_is_disabled(qtbot, monkeypatch) -> None:
+    monkeypatch.delenv("DOOMED_PRISM_DEBUG_FIRE", raising=False)
+    w = _widget(qtbot)
+    src = SimulatorInputSource(w)
+    f9 = QKeyEvent(QEvent.Type.KeyPress, Qt.Key_F9, Qt.NoModifier)
+    assert src.eventFilter(w, f9) is False
+
+
 def test_leave_clears_gaze(qtbot) -> None:
     w = _widget(qtbot)
     src = SimulatorInputSource(w)
