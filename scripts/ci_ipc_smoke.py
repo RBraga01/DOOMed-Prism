@@ -18,7 +18,7 @@ _ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_ROOT / "src"))
 
 from pewpew.framebuffer import FrameReader  # noqa: E402
-from pewpew.input.actions import Action  # noqa: E402
+from pewpew.input.actions import Action, MOVE_MAGNITUDE_SCALE, TURN_MAX_MOUSE_DELTA  # noqa: E402
 from pewpew.ipc.protocol import Message  # noqa: E402
 from pewpew.ipc.server import IpcServer  # noqa: E402
 
@@ -94,20 +94,46 @@ def main() -> int:
             time.sleep(0.05)
         else:
             _fail("framebuffer segment never became readable")
+        RAMP_START, RAMP_LEN = 120, 160          # 80 frames forward 0->max->0, then 80 backward
         counters: set[int] = set()
+        ramp_counters: set[int] = set()
         for i in range(FLOOD_FRAMES):
-            server.send(Message.turn(int(Action.TURN_RIGHT), i % 40))
+            # TURN sweep spanning 0 .. TURN_MAX_MOUSE_DELTA + margin (exercises the C clamp)
+            server.send(Message.turn(int(Action.TURN_RIGHT), i % (TURN_MAX_MOUSE_DELTA + 8)))
+            # analog MOVE ramp: a triangle 0 -> MOVE_MAGNITUDE_SCALE -> 0, forward then backward
+            if RAMP_START <= i < RAMP_START + RAMP_LEN:
+                k = i - RAMP_START
+                half = RAMP_LEN // 2
+                local = k if k < half else k - half
+                frac = local / (half - 1)
+                tri = 1.0 - abs(2.0 * frac - 1.0)
+                code = Action.MOVE_FORWARD if k < half else Action.MOVE_BACKWARD
+                server.send(Message.action(int(code), round(tri * MOVE_MAGNITUDE_SCALE)))
+            elif i == RAMP_START + RAMP_LEN:
+                server.send(Message.action(int(Action.MOVE_FORWARD), 0))
+                server.send(Message.action(int(Action.MOVE_BACKWARD), 0))
             if i % 50 == 0:
                 server.send(Message.pulse(int(Action.FIRE)))
             server.poll()
-            f = reader.latest()
-            if f is not None:
-                counters.add(f.counter)
+            if proc.poll() is not None:
+                _fail(f"engine exited early ({proc.returncode}) during the flood")
+            frame = reader.latest()
+            if frame is not None:
+                counters.add(frame.counter)
+                if RAMP_START <= i < RAMP_START + RAMP_LEN:
+                    ramp_counters.add(frame.counter)
             time.sleep(1 / 60)
         reader.close()
+        if not server.is_connected:
+            _fail("engine disconnected during the action flood")
         if len(counters) < 10:
             _fail(f"frame_counter did not advance under IPC load ({len(counters)})")
-        print(f"frame_counter advancing under IPC load: {len(counters)} distinct values")
+        if len(ramp_counters) < 10:
+            _fail(f"frame_counter stalled during the analog MOVE ramp ({len(ramp_counters)})")
+        print(
+            f"frame_counter advancing under IPC load: {len(counters)} distinct values "
+            f"({len(ramp_counters)} during the analog MOVE ramp)"
+        )
     finally:
         server.close()
         proc.send_signal(signal.SIGINT)

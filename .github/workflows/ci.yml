@@ -125,7 +125,7 @@ jobs:
           {
             echo "### IPC runtime validation"
             echo ""
-            echo ":white_check_mark: The patched engine connected over a local socket, completed the version handshake, stayed live with an advancing \`frame_counter\` under a 500-frame action flood, and tore down cleanly with no orphan and no leftover socket."
+            echo ":white_check_mark: The patched engine connected over a local socket, completed the version handshake, stayed live with an advancing \`frame_counter\` under a 500-frame action flood **including an analog forward/back \`forwardmove\` ramp**, and tore down cleanly with no orphan and no leftover socket."
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Note on ARM64
