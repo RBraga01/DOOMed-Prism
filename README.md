@@ -15,11 +15,10 @@ not a native SDL window.*
 
 ## Current status
 
-**Milestone 3a is implemented on `feature/doomed-prism-m3`; its decision gate is
-pending.** The input core and the local‑IPC boundary — normalized gaze/fire
-actions streamed to the patched engine over a per‑run socket — are in place on
-top of a complete Milestone 2: real DOOM frames are visible and updating inside
-the Raven Simulator.
+**Milestone 3a — input & IPC:** implemented on `feature/doomed-prism-m3`.
+Gaze drives a **radial analog stick** — proportional turn *and* forward/back
+from one gaze vector — over a local IPC socket to the patched engine; the
+Windows/Raven decision gate is still pending.
 
 - Validated on Windows 11 in **Raw, Night, Day, Outdoors and Camera** modes —
   live, updating pixels composited by the real Raven Simulator compositor.
