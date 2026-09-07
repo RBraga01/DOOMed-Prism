@@ -6,7 +6,8 @@ paths, Crispy Doom binaries, IWADs, or simulator screenshots. Keep screenshots
 and any local notes under the ignored `artifacts/milestone-3/` directory.
 
 The hard question this gate answers: **does IPC-only normalized input drive real
-DOOM gameplay inside the Qt viewport — gaze steering, progressive turn, debounced
+DOOM gameplay inside the Qt viewport — the radial analog stick (proportional turn
+**and** forward/back from one gaze vector, a round dead zone), debounced
 click-fire, fused spoken-fire (the `F9` debug source with
 `DOOMED_PRISM_DEBUG_FIRE=1`), and Enter-pause — with Crispy's SDL window
 unfocused the entire time, and does every lifecycle transition release all held
@@ -58,9 +59,10 @@ inputs with no stuck key and no orphan process?**
   ```
 
   Confirm it adds only `src/i_ipc_input.c` / `src/i_ipc_input.h` plus small hunks
-  in `src/d_loop.c`, `src/i_video.c`, and `src/CMakeLists.txt`, and that the
-  total changed-line count stays within the stated diff-minimality ceiling. A
-  patch that touches any other file, or exceeds the ceiling, is
+  in `src/d_loop.c`, `src/i_video.c`, and `src/CMakeLists.txt`, and one
+  clearly-marked hunk in `src/doom/g_game.c` (the R14 `forwardmove` fold), and
+  that the total changed-line count stays within the stated diff-minimality
+  ceiling. A patch that touches any other file, or exceeds the ceiling, is
   `BLOCKED/RETRY — implementation or environment failure`.
 
 - [ ] Record the required environment fields in `docs/validation/milestone-3a-result.md` without private locations or credentials: Windows version, Python version, Crispy Doom pinned tag/commit from `crispy-doom.lock`, C compiler version, SDL2 development library version, permitted Freedoom IWAD identity/checksum (or the redaction note), GPU, and display scaling.
@@ -138,19 +140,23 @@ non-sensitive observation.
   regress the M2 export path.
 - [ ] **With Crispy's SDL window minimised or behind the Raven Simulator, and
   unfocused, for the whole run:**
-  - [ ] Gaze into the **left turn band** turns the DOOM view left; the **right
-    band** turns it right.
-  - [ ] Returning gaze to the **dead zone** stops the turn within ~2 ticks.
-  - [ ] Gaze **farther from the dead zone** turns visibly faster than gaze just
-    outside it (progressive turn).
-  - [ ] Gaze into the **upper band** walks forward; the **lower band** walks
-    backward.
-  - [ ] An **upper corner** walks forward while turning (combined movement).
-  - [ ] **One click fires one shot.** **Five fast clicks fire fewer than five
-    shots** (debounce; the `PULSE_HOLD_TICS` key hold is understood).
+  - [ ] Gaze left of the **dead-zone circle** turns the DOOM view left; right of
+    it, right. Returning gaze inside the circle stops the turn within ~3–5 ticks,
+    smoothly, with no abrupt cut.
+  - [ ] Gaze farther from the circle turns visibly faster than gaze just outside
+    it, smoothly, with no step (the curved analog stick).
+  - [ ] Gaze above the circle walks forward; below, backward — and, like turn,
+    **faster the farther out**, smoothly. Record whether forward is proportional
+    or (degraded mode) single-speed.
+  - [ ] **Backward is as reachable and as fast as forward** — no ~9 px sliver.
+  - [ ] Gaze up-and-to-a-side walks forward while turning, both from **one
+    vector**; sweeping the gaze slowly across that **diagonal** (and across where
+    the old zone boundary used to be) never makes forward stutter, slow abruptly,
+    or cut out.
+  - [ ] **One click fires one shot. Five fast clicks fire fewer than five shots**
+    (debounce; the `PULSE_HOLD_TICS` key hold is understood).
   - [ ] **`F9` fires a shot through the same path** (spoken-fire fusion via the
-    debug source).
-  - [ ] **A click and an `F9` within ~30 ms fire once** (fusion debounce).
+    debug source). **A click and an `F9` within ~30 ms fire once.**
   - [ ] **`Enter` shows the `PAUSED` overlay and pauses; `Enter` again resumes.**
     No SDL-window focus was used at any point during the run.
 - [ ] **No Win32 `SetParent` anywhere** in the window tree. Crispy Doom's SDL
@@ -166,10 +172,12 @@ no held turn persisting across the transition — and leave no orphan process.
   sleep/conceal or hide the host window: the game pauses and the `PAUSED` overlay
   shows. On resume it unpauses and no key is stuck — the held turn from before the
   hide does not persist.
-- [ ] **Kill the PewPew process while a turn is held.** DOOM stops turning (the
-  injected `ev_mouse` deltas stop; the C-side release-all posts `ev_keyup` for
-  every held `MOVE_*` key) and keeps running on SDL input. After its window is
-  closed there is no orphan process.
+- [ ] **Kill the PewPew process while the stick is held forward-and-turning.**
+  DOOM stops turning **and stops moving forward** (the injected `ev_mouse` deltas
+  stop; the C-side release-all zeroes the injected `forwardmove` contribution
+  (and, in the duty-cycle fallback, posts `ev_keyup` for a movement key)) and
+  keeps running on SDL input. After its window is closed there is no orphan
+  process.
 - [ ] **Normal close.** `cleanup()` runs stop-tick → `pipeline.release_all()` →
   `IpcServer.close()` → `reader.close()` → `engine.stop()` with no exception; the
   one recorded PID is gone; the IPC socket path is removed. Record the exception
@@ -188,11 +196,14 @@ be lighter, as in the Milestone 2 gate. Do not add the captures to Git.
 | Mode | Suggested local evidence | Required observation |
 | --- | --- | --- |
 | Raw | `raw.mp4`, or `raw-1.png` + `raw-2.png` | Gaze-driven view motion and a fired shot inside the viewport, SDL window unfocused |
-| Night | `night.mp4` | Full dynamic proof: gaze steering, progressive turn, a fired shot, and Enter-pause, all composited, SDL window unfocused |
+| Night | `night.mp4` | Full dynamic proof: gaze steering the radial stick, proportional turn and forward from one vector, a fired shot, and Enter-pause, all composited, SDL window unfocused |
 | Day | `day.mp4`, or `day-1.png` + `day-2.png` | Gaze-driven view motion and a fired shot inside the composited viewport, SDL window unfocused |
 | Outdoors | `outdoors.mp4`, or `outdoors-1.png` + `outdoors-2.png` | Gaze-driven view motion and a fired shot inside the composited viewport, SDL window unfocused |
 | Camera | `camera.mp4`, or `camera-1.png` + `camera-2.png` | Gaze-driven view motion and a fired shot inside the composited viewport, SDL window unfocused |
 
+- [ ] During the movement checks, save the outgoing `ACTION.value` /
+  `TURN.value` streams to `artifacts/milestone-3/` and attach a quick
+  value-vs-eccentricity plot — a semi-objective proportionality artifact.
 - [ ] Any clip promoted into tracked `docs/media/` is **Freedoom-only** and has
   been reviewed frame-by-frame for usernames, file paths, and IWAD identity
   before being committed. A commercial IWAD clip is never promoted.
@@ -203,24 +214,34 @@ After every available mode and all lifecycle checks are complete, edit the sole
 **Final decision** field in `docs/validation/milestone-3a-result.md` to exactly
 one of:
 
-- **PASS — IPC input path viable.** Gaze movement and progressive turn,
-  click-fire with debounce, spoken-fire fusion via the `F9` source, and
-  Enter-pause all drive the composited DOOM with the SDL window unfocused; every
-  lifecycle transition releases held input with no stuck key; one clean PID, no
-  orphan, socket removed, no `cleanup()` exception; the M2 framebuffer path still
-  advances.
+- **PASS — IPC input path viable.** The R14 radial stick drives the composited
+  DOOM with the SDL window unfocused — proportional turn **and**
+  proportional forward/back from one vector, a round dead zone, no forward
+  stutter when the gaze sweeps a diagonal, backward as reachable as forward —
+  together with click-fire debounce, `F9` spoken-fire fusion, and Enter-pause;
+  every lifecycle transition releases held input with no stuck key; one clean
+  PID, no orphan, socket removed, no `cleanup()` exception; the M2 framebuffer
+  path still advances. Moving feels as controllable as looking around (the R14
+  acceptance bar).
+- **PASS (degraded forward) — IPC input path viable, forward single-speed.**
+  Everything under PASS holds *except* proportional forward: the C forward path
+  fell back to R14's degraded mode, so forward is direction-correct (up / down /
+  diagonal from the vector) but a single speed past the dead zone. Turn is
+  proportional. Acceptable to close 3a; a follow-up re-opens the `forwardmove`
+  mechanism only.
 - **FAIL — IPC input path insufficient.** The engine connects and the handshake
-  completes, but injected events do not reliably drive gameplay (for example
-  `ev_mouse` turning is unusable, or `D_PostEvent` from the pump races the tic and
-  drops inputs). This opens a design task for the R5 keyboard-duty-cycle turn or a
-  different injection point — it does not discard the §4 IPC boundary.
+  completes, but injected input does not reliably drive gameplay — `ev_mouse`
+  turning is unusable, *even single-speed* forward does not reach the game, or
+  `D_PostEvent` from the pump races the tic and drops inputs. This opens a
+  design task for the R5 keyboard-duty-cycle turn / R14 duty-cycle forward or a
+  different injection point — it does not discard the §4 IPC boundary or
+  resurrect the zone model.
 - **BLOCKED/RETRY — implementation or environment failure.** Build, launch,
   connection, handshake, geometry, lifecycle, or evidence collection fails. Fix
   the named issue and repeat with a fresh PID. Does not select an injection
   design.
-- **PENDING — incomplete evidence.** Evidence remains incomplete (including
-  `not run`) or a named optical mode is unavailable without a documented reason.
-  This is never a passing result.
+- **PENDING — incomplete evidence.** Evidence incomplete or a named optical mode
+  unavailable without a documented reason. Never a pass.
 
 ## Final automated verification and commit
 

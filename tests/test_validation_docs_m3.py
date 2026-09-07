@@ -13,12 +13,27 @@ def _docs() -> str:
     return CHECKLIST.read_text(encoding="utf-8") + RESULT.read_text(encoding="utf-8")
 
 
-def test_gate_carries_the_four_decision_strings() -> None:
+def test_gate_carries_the_five_decision_strings() -> None:
     d = _docs()
     assert "PASS — IPC input path viable" in d
+    assert "PASS (degraded forward) — IPC input path viable, forward single-speed" in d
     assert "FAIL — IPC input path insufficient" in d
     assert "BLOCKED/RETRY — implementation or environment failure" in d
     assert "PENDING — incomplete evidence" in d
+
+
+def test_gate_describes_the_radial_stick_not_the_retired_zones() -> None:
+    d = _docs()
+    for present in (
+        "dead-zone circle",
+        "one vector",
+        "proportional forward",
+        "diagonal",
+        "backward as reachable as forward",
+    ):
+        assert present in d, f"missing R14 phrase: {present}"
+    for retired in ("turn band", "upper band", "lower band", "upper corner", "progressive turn"):
+        assert retired not in d, f"retired zone phrase still present: {retired}"
 
 
 def test_gate_requires_ipc_only_play_with_the_sdl_window_unfocused() -> None:

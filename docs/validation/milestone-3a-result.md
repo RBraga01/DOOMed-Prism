@@ -75,11 +75,11 @@ minimised or behind the Raven Simulator, and unfocused, for the whole run**.
 | Exactly one new crispy-doom PID | _fill in_ | |
 | IPC socket present while running / gone after close | _fill in_ | placeholder address + port only |
 | `FrameReader` `frame_counter` advancing (M2 path unbroken) | _fill in_ | |
-| Left turn band turns view left; right band turns right | _fill in_ | |
-| Return to dead zone stops the turn within ~2 ticks | _fill in_ | |
-| Gaze farther from the dead zone turns faster (progressive) | _fill in_ | |
-| Upper band walks forward; lower band walks backward | _fill in_ | |
-| Upper corner walks forward while turning | _fill in_ | |
+| Turn: left of the dead-zone circle turns left; right turns right; stop within ~3–5 ticks | _fill in_ | |
+| Turn rate rises with distance from the circle, smoothly, no step | _fill in_ | |
+| Forward/back proportional to gaze eccentricity (or degraded single-speed — say which) | _fill in_ | |
+| Backward as reachable and as fast as forward (no ~9 px sliver) | _fill in_ | |
+| Diagonal sweep never makes forward stutter or cut out | _fill in_ | |
 | One click fires one shot | _fill in_ | |
 | Five fast clicks fire fewer than five shots (debounce) | _fill in_ | |
 | `F9` fires a shot through the same path | _fill in_ | |
@@ -105,11 +105,11 @@ filenames, never a path.
 | Camera | _fill in_ | _fill in_ | _fill in_ | _fill in_ | _fill in / not captured_ | |
 
 Note on evidence depth: Night must carry full dynamic (two-or-more different game
-states) proof — gaze steering, progressive turn, a fired shot, and Enter-pause.
-Raw, Day, Outdoors, and Camera may be lighter, as in the Milestone 2 gate, since
-all modes share one paint and capture pipeline. Any clip promoted into tracked
-`docs/media/` is Freedoom-only and was reviewed frame-by-frame for usernames,
-paths, and IWAD identity.
+states) proof — gaze steering the radial stick, proportional turn and forward, a
+fired shot, and Enter-pause. Raw, Day, Outdoors, and Camera may be lighter, as in
+the Milestone 2 gate, since all modes share one paint and capture pipeline. Any
+clip promoted into tracked `docs/media/` is Freedoom-only and was reviewed
+frame-by-frame for usernames, paths, and IWAD identity.
 
 ## Lifecycle-check results
 
@@ -119,7 +119,7 @@ persisting — and leave no orphan process.
 | Transition | Held input released, no stuck key | No orphan / clean PID | `cleanup()` exception | Non-sensitive observation |
 | --- | --- | --- | --- | --- |
 | Sleep / conceal (or hide host) → pause + overlay; resume → unpause | _fill in_ | _n/a_ | _n/a_ | held turn from before the hide must not persist |
-| Kill PewPew while a turn is held → DOOM stops turning, keeps running on SDL | _fill in_ | _fill in_ | _n/a_ | no orphan after its window is closed |
+| Kill PewPew while the stick is held forward-and-turning → DOOM stops turning **and stops moving forward**, keeps running on SDL | _fill in_ | _fill in_ | _n/a_ | no orphan after its window is closed |
 | Normal close → `cleanup()` stop-tick → release-all → server-close → reader-close → engine-stop | _fill in_ | _fill in_ | _none expected_ | one PID gone; socket path removed |
 
 If the recorded PID remains present after PewPew closes, or if `cleanup()` raises
@@ -146,21 +146,32 @@ considering another decision.
 **Final decision:** PENDING — incomplete evidence
 
 _This run has not been performed yet. Replace this line with exactly one of the
-four decisions below once the checklist is complete._
+five decisions below once the checklist is complete._
 
 Use only one of these decisions after completing the checklist:
 
-- **PASS — IPC input path viable.** Gaze movement and progressive turn,
-  click-fire with debounce, spoken-fire fusion via the `F9` source, and
-  Enter-pause all drive the composited DOOM with the SDL window unfocused; every
-  lifecycle transition releases held input with no stuck key; one clean PID, no
-  orphan, socket removed, no `cleanup()` exception; the M2 framebuffer path still
-  advances.
+- **PASS — IPC input path viable.** The R14 radial stick drives the composited
+  DOOM with the SDL window unfocused — proportional turn **and**
+  proportional forward/back from one vector, a round dead zone, no forward
+  stutter when the gaze sweeps a diagonal, backward as reachable as forward —
+  together with click-fire debounce, `F9` spoken-fire fusion, and Enter-pause;
+  every lifecycle transition releases held input with no stuck key; one clean
+  PID, no orphan, socket removed, no `cleanup()` exception; the M2 framebuffer
+  path still advances. Moving feels as controllable as looking around (the R14
+  acceptance bar).
+- **PASS (degraded forward) — IPC input path viable, forward single-speed.**
+  Everything under PASS holds *except* proportional forward: the C forward path
+  fell back to R14's degraded mode, so forward is direction-correct (up / down /
+  diagonal from the vector) but a single speed past the dead zone. Turn is
+  proportional. Acceptable to close 3a; a follow-up re-opens the `forwardmove`
+  mechanism only.
 - **FAIL — IPC input path insufficient.** The engine connects and the handshake
-  completes, but injected events do not reliably drive gameplay (for example
-  `ev_mouse` turning is unusable, or `D_PostEvent` from the pump races the tic and
-  drops inputs). This opens a design task for the R5 keyboard-duty-cycle turn or a
-  different injection point — it does not discard the §4 IPC boundary.
+  completes, but injected input does not reliably drive gameplay — `ev_mouse`
+  turning is unusable, *even single-speed* forward does not reach the game, or
+  `D_PostEvent` from the pump races the tic and drops inputs. This opens a
+  design task for the R5 keyboard-duty-cycle turn / R14 duty-cycle forward or a
+  different injection point — it does not discard the §4 IPC boundary or
+  resurrect the zone model.
 - **BLOCKED/RETRY — implementation or environment failure.** Build, launch,
   connection, handshake, geometry, lifecycle, or evidence collection fails. Fix
   the named issue and repeat with a fresh PID. Does not select an injection
