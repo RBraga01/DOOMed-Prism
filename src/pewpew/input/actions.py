@@ -10,6 +10,7 @@ from pewpew.ipc.protocol import Message
 
 MAGNITUDE_STEPS = 20
 TURN_MAX_MOUSE_DELTA = 40
+MOVE_MAGNITUDE_SCALE = 10000
 
 
 class Action(enum.IntEnum):
@@ -32,14 +33,26 @@ class HeldAction:
     magnitude: float
 
 
+def _quantise(magnitude: float) -> float:
+    """Snap a raw magnitude to the MAGNITUDE_STEPS grid, clamped to [0, 1]."""
+    clamped = 0.0 if magnitude < 0.0 else 1.0 if magnitude > 1.0 else magnitude
+    return round(clamped * MAGNITUDE_STEPS) / MAGNITUDE_STEPS
+
+
+def _move_value(magnitude: float) -> int:
+    return round(_quantise(magnitude) * MOVE_MAGNITUDE_SCALE)
+
+
 def _turn_value(magnitude: float) -> int:
-    return max(0, min(TURN_MAX_MOUSE_DELTA, round(magnitude * TURN_MAX_MOUSE_DELTA)))
+    return min(
+        round(_quantise(magnitude) * TURN_MAX_MOUSE_DELTA), TURN_MAX_MOUSE_DELTA
+    )
 
 
 class ActionRouter:
     def __init__(self, sink: Callable[[Message], None]) -> None:
         self._sink = sink
-        self._held: dict[Action, int] = {}  # action -> 1 while held (MOVE and TURN)
+        self._held: dict[Action, int] = {}  # axis -> last non-zero wire value sent
 
     def set_held(self, held: frozenset[HeldAction]) -> None:
         incoming = {h.action: h.magnitude for h in held}
@@ -48,18 +61,19 @@ class ActionRouter:
                 self._emit_zero(action)
                 del self._held[action]
         for action in sorted(incoming):
-            magnitude = incoming[action]
             if action in _MOVE:
-                # On/off: one 10000 on the transition to held, one 0 on release.
-                if action not in self._held:
-                    self._held[action] = 1
-                    self._sink(Message.action(int(action), 10000))
+                value = _move_value(incoming[action])
             elif action in _TURN:
-                # TURN is a one-shot ev_mouse delta the C side zeroes every tic,
-                # so a sustained turn needs a fresh frame on *every* call while
-                # the gaze is held (spec R6). Release still emits exactly one 0.
-                self._held[action] = 1
-                self._sink(Message.turn(int(action), _turn_value(magnitude)))
+                value = _turn_value(incoming[action])
+            else:
+                continue
+            if value == 0 and action not in self._held:
+                continue  # sub-quantum, never engaged — stay silent
+            self._sink(self._frame(action, value))
+            if value == 0:
+                del self._held[action]
+            else:
+                self._held[action] = value
 
     def pulse(self, action: Action) -> None:
         self._sink(Message.pulse(int(action)))
@@ -72,8 +86,11 @@ class ActionRouter:
             self._emit_zero(action)
         self._held.clear()
 
-    def _emit_zero(self, action: Action) -> None:
+    @staticmethod
+    def _frame(action: Action, value: int) -> Message:
         if action in _MOVE:
-            self._sink(Message.action(int(action), 0))
-        else:
-            self._sink(Message.turn(int(action), 0))
+            return Message.action(int(action), value)
+        return Message.turn(int(action), value)
+
+    def _emit_zero(self, action: Action) -> None:
+        self._sink(self._frame(action, 0))

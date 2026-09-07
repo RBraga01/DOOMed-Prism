@@ -1,8 +1,10 @@
-"""Tests for the normalized action model and the IPC-emitting router."""
+"""Tests for the normalized action model and the IPC-emitting router (R14)."""
 
 from __future__ import annotations
 
 from pewpew.input.actions import (
+    MAGNITUDE_STEPS,
+    MOVE_MAGNITUDE_SCALE,
     TURN_MAX_MOUSE_DELTA,
     Action,
     ActionRouter,
@@ -17,49 +19,80 @@ def test_action_codes_match_the_wire_table() -> None:
     assert (Action.FIRE, Action.USE, Action.PAUSE) == (10, 11, 20)
 
 
+def test_move_magnitude_scale_matches_the_spec() -> None:
+    assert MOVE_MAGNITUDE_SCALE == 10000
+
+
 def _router():
     sent: list[Message] = []
     return ActionRouter(sent.append), sent
 
 
-def test_set_held_emits_move_forward_on_hold_then_release() -> None:
-    router, sent = _router()
-    router.set_held(frozenset({HeldAction(Action.MOVE_FORWARD, 1.0)}))
-    router.set_held(frozenset())
-    assert sent == [
-        Message.action(Action.MOVE_FORWARD, 10000),
-        Message.action(Action.MOVE_FORWARD, 0),
-    ]
+def _q(magnitude: float) -> float:
+    m = 0.0 if magnitude < 0.0 else 1.0 if magnitude > 1.0 else magnitude
+    return round(m * MAGNITUDE_STEPS) / MAGNITUDE_STEPS
 
 
-def test_turn_emits_a_frame_every_call_while_held() -> None:
-    """TURN is a one-shot mouse delta: a held gaze must re-send it every tick."""
+def test_quantiser_pins_the_mid_grid_and_round_up_cases_with_literals() -> None:
     router, sent = _router()
-    router.set_held(frozenset({HeldAction(Action.TURN_RIGHT, 1.0)}))
-    # A near-identical magnitude must STILL produce a frame — not silence.
-    router.set_held(frozenset({HeldAction(Action.TURN_RIGHT, 0.99)}))
-    router.set_held(frozenset({HeldAction(Action.TURN_RIGHT, 0.5)}))
+    router.set_held(frozenset({HeldAction(Action.MOVE_FORWARD, 0.75), HeldAction(Action.TURN_RIGHT, 0.99)}))
+    vals = {(m.type, m.code): m.value for m in sent}
+    assert vals[(MessageType.ACTION, Action.MOVE_FORWARD)] == 7500   # 0.75 -> 15/20 -> 7500
+    assert vals[(MessageType.TURN, Action.TURN_RIGHT)] == 40         # 0.99 -> round(19.8)=20 -> 40 (rounds UP to full)
+
+
+def test_move_emits_an_analog_frame_every_call_while_held_then_one_zero() -> None:
+    router, sent = _router()
+    for mag in (1.0, 0.75, 0.5):
+        router.set_held(frozenset({HeldAction(Action.MOVE_FORWARD, mag)}))
     router.set_held(frozenset())  # release
     assert sent == [
-        Message.turn(Action.TURN_RIGHT, TURN_MAX_MOUSE_DELTA),
-        Message.turn(Action.TURN_RIGHT, round(0.99 * TURN_MAX_MOUSE_DELTA)),
-        Message.turn(Action.TURN_RIGHT, round(0.5 * TURN_MAX_MOUSE_DELTA)),
-        Message.turn(Action.TURN_RIGHT, 0),
+        Message.action(Action.MOVE_FORWARD, round(_q(1.0) * MOVE_MAGNITUDE_SCALE)),
+        Message.action(Action.MOVE_FORWARD, round(_q(0.75) * MOVE_MAGNITUDE_SCALE)),
+        Message.action(Action.MOVE_FORWARD, round(_q(0.5) * MOVE_MAGNITUDE_SCALE)),
+        Message.action(Action.MOVE_FORWARD, 0),
     ]
-    # exactly one TURN frame per non-release call, then one 0 on release
-    assert len([m for m in sent if m.value != 0]) == 3
     assert [m.value for m in sent].count(0) == 1
 
 
-def test_move_held_across_many_calls_emits_one_hold_then_one_release() -> None:
+def test_turn_emits_a_frame_every_call_while_held_then_one_zero() -> None:
     router, sent = _router()
-    for _ in range(5):
-        router.set_held(frozenset({HeldAction(Action.MOVE_FORWARD, 1.0)}))
+    for mag in (1.0, 0.99, 0.5):
+        router.set_held(frozenset({HeldAction(Action.TURN_RIGHT, mag)}))
     router.set_held(frozenset())
     assert sent == [
-        Message.action(Action.MOVE_FORWARD, 10000),
-        Message.action(Action.MOVE_FORWARD, 0),
+        Message.turn(Action.TURN_RIGHT, min(round(_q(1.0) * TURN_MAX_MOUSE_DELTA), TURN_MAX_MOUSE_DELTA)),
+        Message.turn(Action.TURN_RIGHT, min(round(_q(0.99) * TURN_MAX_MOUSE_DELTA), TURN_MAX_MOUSE_DELTA)),
+        Message.turn(Action.TURN_RIGHT, min(round(_q(0.5) * TURN_MAX_MOUSE_DELTA), TURN_MAX_MOUSE_DELTA)),
+        Message.turn(Action.TURN_RIGHT, 0),
     ]
+
+
+def test_full_deflection_maps_to_the_scale_maxima() -> None:
+    router, sent = _router()
+    router.set_held(
+        frozenset({HeldAction(Action.MOVE_FORWARD, 1.0), HeldAction(Action.TURN_LEFT, 1.0)})
+    )
+    values = {(m.type, m.code): m.value for m in sent}
+    assert values[(MessageType.ACTION, Action.MOVE_FORWARD)] == 10000
+    assert values[(MessageType.TURN, Action.TURN_LEFT)] == 40
+
+
+def test_a_sub_quantum_hold_emits_nothing_then_one_zero_only_after_a_real_value() -> None:
+    router, sent = _router()
+    tiny = 0.4 / MAGNITUDE_STEPS  # quantises to 0
+    router.set_held(frozenset({HeldAction(Action.MOVE_FORWARD, tiny)}))
+    assert sent == []  # never engaged -> silent
+    router.set_held(frozenset({HeldAction(Action.MOVE_FORWARD, 1.0)}))  # now a real value
+    router.set_held(frozenset({HeldAction(Action.MOVE_FORWARD, tiny)}))  # falls back below the quantum
+    router.set_held(frozenset())
+    assert [m.value for m in sent] == [10000, 0]  # one real, one fall — no second 0 on release
+
+
+def test_over_range_magnitude_is_clamped() -> None:
+    router, sent = _router()
+    router.set_held(frozenset({HeldAction(Action.TURN_RIGHT, 3.0)}))
+    assert sent == [Message.turn(Action.TURN_RIGHT, TURN_MAX_MOUSE_DELTA)]
 
 
 def test_pulse_and_discrete_emit_one_frame_each() -> None:
@@ -69,7 +102,7 @@ def test_pulse_and_discrete_emit_one_frame_each() -> None:
     assert sent == [Message.pulse(Action.FIRE), Message.discrete(Action.PAUSE)]
 
 
-def test_release_all_releases_every_held_action_and_is_a_noop_when_empty() -> None:
+def test_release_all_zeros_every_outstanding_axis_and_is_a_noop_when_clear() -> None:
     router, sent = _router()
     router.set_held(
         frozenset({HeldAction(Action.MOVE_FORWARD, 1.0), HeldAction(Action.TURN_LEFT, 1.0)})
