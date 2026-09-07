@@ -22,6 +22,7 @@ except ImportError as error:
 
 from pewpew.framebuffer import STRIDE, SLOT_BYTES, Frame, FrameSegmentError
 from pewpew.host_widget import DoomHostWidget
+from pewpew.input.pipeline import InputPipeline
 from pewpew.ipc.protocol import Message
 
 
@@ -233,6 +234,33 @@ def test_about_to_quit_and_close_event_both_run_cleanup(qtbot) -> None:
     host2 = _host(qtbot, engine=engine2)
     host2.close()
     assert engine2.stop_calls == 1
+
+
+def test_showevent_passes_the_viewport_surface_explicitly_to_the_pipeline(qtbot, monkeypatch) -> None:
+    """Finding-1 host-layer guard: showEvent must construct InputPipeline with an
+    EXPLICIT surface kwarg, not rely on the surface=None fallback."""
+    import functools
+    captured: dict = {}
+    real_init = InputPipeline.__init__
+
+    @functools.wraps(real_init)
+    def spy_init(self, source, send, *, surface=None, spoken_fire=None):
+        captured["surface"] = surface
+        real_init(self, source, send, surface=surface, spoken_fire=spoken_fire)
+
+    monkeypatch.setattr("pewpew.host_widget.InputPipeline.__init__", spy_init)
+    try:
+        engine = _Engine()
+        engine.start = lambda *, ipc_address=None: 8128
+        config = SimpleNamespace(viewport_width=640, viewport_height=480)
+        host = DoomHostWidget(config, engine=engine, frame_reader=_Reader(), ipc_server=_Server())
+        qtbot.addWidget(host)
+        host.show()   # showEvent runs synchronously and builds the real pipeline
+        assert captured["surface"] == (640, 480)   # explicit, not None
+        assert host._pipeline._stick._cx == 320 and host._pipeline._stick._cy == 240
+        host.cleanup()
+    finally:
+        monkeypatch.undo()
 
 
 class _Server:

@@ -202,7 +202,9 @@ else:
                     self._reader = self._reader_factory(name)
                     self.viewport.set_reader(self._reader)
                 self._pipeline = self._injected_pipeline or InputPipeline(
-                    SimulatorInputSource(self.viewport), self._server.send
+                    SimulatorInputSource(self.viewport),
+                    self._server.send,
+                    surface=(self.viewport.width(), self.viewport.height()),
                 )
                 self._timer.start()
             except BaseException:
