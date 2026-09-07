@@ -59,10 +59,12 @@ Every task's requirements implicitly include this section. Values are copied ver
 
 **Files:**
 - Rewrite: `src/pewpew/input/gaze.py`
+- Modify (keep-importable only): `src/pewpew/input/pipeline.py` — its 4 use-sites of the retired classes, so the tree still imports between here and Task 3. The full pipeline rework (surface arg, guards, tests) is Task 3.
 - Rewrite test: `tests/test_input_gaze.py`
 
 **Interfaces:**
 - Consumes: `pewpew.input.actions.Action` (unchanged enum), `pewpew.input.actions.HeldAction` (`HeldAction(action, magnitude)`, unchanged).
+- Note on RED: the rewritten test file fails at *collection* (`ImportError`). After Step 3 lands, run `pytest tests/test_input_gaze.py -x -q` and confirm each test's **first** failure reason is behavioural, not a stale import — do not batch past a test you never saw fail for the right reason.
 - Produces:
   - `GazeStick(surface_w: int, surface_h: int, *, dead_zone_radius: float = DEAD_ZONE_RADIUS, outer_saturation: float = OUTER_SATURATION, response_exponent: float = RESPONSE_EXPONENT)` — `__init__` asserts `0.0 < dead_zone_radius < outer_saturation <= 1.0` and `response_exponent > 0.0`. Attributes `_cx`, `_cy` (ints, `surface_w // 2`, `surface_h // 2`). Method `resolve(x: int, y: int) -> tuple[float, float]` — stateless, returns `(fx, fy)` with `hypot(fx, fy) == s <= 1.0`, or `(0.0, 0.0)` inside the dead zone.
   - `GazeVectorFilter(*, ema_alpha: float = MAGNITUDE_EMA_ALPHA, release_alpha: float = RELEASE_EMA_ALPHA)` — `update(vec: tuple[float, float], now: float) -> frozenset[HeldAction]` (≤ one `MOVE_*` + ≤ one `TURN_*`, raw-float magnitudes) and `reset() -> None` (sets `e_prev` to `(0.0, 0.0)`).
@@ -180,13 +182,25 @@ def test_left_and_backward_signs() -> None:
     assert _actions(out) == {Action.TURN_LEFT, Action.MOVE_BACKWARD}
 
 
-def test_a_single_sample_dropout_barely_dents_the_output() -> None:
+def test_a_nearby_nonzero_dropout_barely_dents_the_output() -> None:
+    # A one-frame jitter to a *nearby non-zero* vector stays on ema_alpha (0.4),
+    # so the output barely moves. (A genuine (0,0) is a different case below.)
     f = GazeVectorFilter()
     for _ in range(6):
-        f.update((0.0, -0.8), now=0.0)          # steady forward
+        f.update((0.0, -0.8), now=0.0)
     before = next(h.magnitude for h in f.update((0.0, -0.8), now=0.0))
-    dip = next(h.magnitude for h in f.update((0.0, 0.0), now=0.0))   # one dropout
-    assert dip > 0.5 * before                    # EMA, not a hard drop
+    dip = next(h.magnitude for h in f.update((0.0, -0.78), now=0.0))
+    assert dip > 0.9 * before
+
+
+def test_a_genuine_zero_input_drops_fast_by_design() -> None:
+    # (0,0) IS the look-back-to-centre signal -> release_alpha (0.8) -> ~80%/tick.
+    f = GazeVectorFilter()
+    for _ in range(6):
+        f.update((0.0, -0.8), now=0.0)
+    before = next(h.magnitude for h in f.update((0.0, -0.8), now=0.0))
+    dip = next(h.magnitude for h in f.update((0.0, 0.0), now=0.0))
+    assert 0.15 * before < dip < 0.30 * before   # ~0.2x, the intended fast release
 
 
 def test_release_alpha_stops_a_held_turn_within_about_five_ticks() -> None:
@@ -220,28 +234,29 @@ def test_forward_never_cuts_out_on_a_diagonal_sweep() -> None:
     s = _stick()
     f = GazeVectorFilter()
     cx, cy, k = 320, 240, 150
-    pts = []
-    for i in range(31):
-        t = i / 30.0
-        pts.append((round(cx + t * k), round(cy - (1.0 - t) * k)))   # forward -> right
+    pts = [
+        (round(cx + (i / 30.0) * k), round(cy - (1.0 - i / 30.0) * k))
+        for i in range(31)
+    ]  # pure forward -> pure right, through the old zone boundary
     mags: list[float] = []
     for (x, y) in pts:
         out = f.update(s.resolve(x, y), now=0.0)
         fwd = [h.magnitude for h in out if h.action is Action.MOVE_FORWARD]
         mags.append(fwd[0] if fwd else 0.0)
-    # forward is present for the whole sweep while the vector still points up,
-    # and never collapses to 0 between two non-zero samples.
-    nonzero = [m for m in mags if m > 0.0]
-    assert len(nonzero) >= 20
-    for a, b in zip(mags, mags[1:]):
-        if a > 0.0 and b == 0.0:
-            assert False, "forward cut out mid-sweep"
+    # No interior zero: everything before the LAST non-zero sample is non-zero.
+    last_nz = max(i for i, m in enumerate(mags) if m > 0.0)
+    assert last_nz >= 20
+    assert all(m > 0.0 for m in mags[:last_nz]), "forward cut out mid-sweep"
+    # No abrupt collapse: the natural per-tick EMA falloff is ~0.15 of raw
+    # magnitude; a real stutter/cut is a near-full drop. 0.25 cleanly separates.
+    for a, b in zip(mags[:last_nz], mags[1 : last_nz + 1]):
+        assert b >= a - 0.25, f"forward stuttered {a:.3f} -> {b:.3f}"
 ```
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
 Run: `& "E:\Projectos\raven-agent-hud\.venv\Scripts\python.exe" -m pytest tests/test_input_gaze.py -q`
-Expected: FAIL — `ImportError: cannot import name 'GazeStick'` (the module still has `GazeZoneMap`/`GazeFilter`).
+Expected: FAIL — `ImportError: cannot import name 'GazeStick'` (the module still has `GazeZoneMap`/`GazeFilter`). This is a *collection* failure; after Step 3, re-run with `-x` and confirm every test's first failure was behavioural.
 
 - [ ] **Step 3: Rewrite the implementation**
 
@@ -349,12 +364,23 @@ class GazeVectorFilter:
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `& "E:\Projectos\raven-agent-hud\.venv\Scripts\python.exe" -m pytest tests/test_input_gaze.py -q`
-Expected: PASS (all 14).
+Expected: PASS (every test in the file).
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: Keep `pipeline.py` importable**
+
+`src/pewpew/input/pipeline.py` still imports and uses the retired classes; Task 3 does the full rework, but the tree must import in between. Make these minimal edits:
+
+- Line ~9: `from pewpew.input.gaze import GazeFilter, GazeZoneMap` → `from pewpew.input.gaze import GazeStick, GazeVectorFilter`
+- In `__init__`: `self._zones = GazeZoneMap(*surface)` → `self._stick = GazeStick(*surface)`; `self._filter = GazeFilter()` → `self._filter = GazeVectorFilter()`
+- In `tick`: `raw = (self._zones.resolve(*sample.gaze_xy) if sample.gaze_xy is not None else frozenset())` → `vec = (self._stick.resolve(*sample.gaze_xy) if sample.gaze_xy is not None else (0.0, 0.0))`, and `self._router.set_held(self._filter.update(raw, now))` → `self._router.set_held(self._filter.update(vec, now))`
+- `release_all` already calls `self._filter.reset()` — `GazeVectorFilter.reset()` exists, no change.
+
+Leave `surface: tuple[int, int] = (640, 640)` as-is for now (Task 3 changes the default to `None`). Run `& "E:\Projectos\raven-agent-hud\.venv\Scripts\python.exe" -m pytest tests/test_input_gaze.py tests/test_input_actions.py -q` and `python -c "import pewpew.host_widget"` — both must succeed. `tests/test_input_pipeline.py` still fails (Task 3 rewrites it); that is expected and the per-task review for Tasks 1–2 runs only the scoped files above.
+
+- [ ] **Step 6: Commit**
 
 ```bash
-git add src/pewpew/input/gaze.py tests/test_input_gaze.py
+git add src/pewpew/input/gaze.py src/pewpew/input/pipeline.py tests/test_input_gaze.py
 git commit -m "feat(input): replace gaze zones with a radial analog stick (R14 task 1)"
 ```
 
@@ -412,6 +438,15 @@ def _router():
 def _q(magnitude: float) -> float:
     m = 0.0 if magnitude < 0.0 else 1.0 if magnitude > 1.0 else magnitude
     return round(m * MAGNITUDE_STEPS) / MAGNITUDE_STEPS
+
+
+def test_quantiser_pins_the_mid_grid_and_round_up_cases_with_literals() -> None:
+    router, sent = _router()
+    router.set_held(frozenset({HeldAction(Action.MOVE_FORWARD, 0.75)}))
+    router.set_held(frozenset({HeldAction(Action.TURN_RIGHT, 0.99)}))
+    vals = {(m.type, m.code): m.value for m in sent}
+    assert vals[(MessageType.ACTION, Action.MOVE_FORWARD)] == 7500   # 0.75 -> 15/20 -> 7500
+    assert vals[(MessageType.TURN, Action.TURN_RIGHT)] == 40         # 0.99 -> round(19.8)=20 -> 40 (rounds UP to full)
 
 
 def test_move_emits_an_analog_frame_every_call_while_held_then_one_zero() -> None:
@@ -594,8 +629,8 @@ git commit -m "feat(input): per-tick analog MOVE+TURN emit with one quantiser (R
 ## Task 3: `pewpew.input.pipeline` — explicit surface, stick wiring, filter reset
 
 **Files:**
-- Modify: `src/pewpew/input/pipeline.py`
-- Modify: `src/pewpew/input/simulator_source.py` (add the `widget` property — the pipeline's `surface=None` fallback consumes it)
+- Modify: `src/pewpew/input/pipeline.py` (Task 1 did the keep-importable shim; this task does the full rework — `surface=None` default, `_guarded_send` wrapping the `send` callable, F1/F2/F3-testable wiring)
+- Modify: `src/pewpew/input/simulator_source.py` (add the `widget` property — the pipeline's `surface=None` fallback consumes it. §16's "correct the §9 coordinate-space comment" is a no-op: the shipped `MouseMove` handler already clamps to `widget.width()/height()`, there is no 640×640 literal to fix.)
 - Modify: `tests/fakes/fake_input.py`
 - Modify test: `tests/test_input_pipeline.py`
 - Modify test: `tests/test_input_source_qt.py` (one test for the property)
@@ -692,30 +727,46 @@ def test_finding_1_backward_is_reachable_and_symmetric_with_forward() -> None:
 
 def test_finding_2_forward_does_not_drop_to_zero_across_a_diagonal_sweep() -> None:
     cx, cy, k = 320, 240, 150
-    track = []
-    for i in range(31):
-        t = i / 30.0
-        track.append(
-            InputSample((round(cx + t * k), round(cy - (1.0 - t) * k)), False, False, False)
+    track = [
+        InputSample(
+            (round(cx + (i / 30.0) * k), round(cy - (1.0 - i / 30.0) * k)),
+            False, False, False,
         )
+        for i in range(31)
+    ]
     pipe, sent = _pipe(track)
     for i in range(31):
         pipe.tick(now=i)
     fwd = _values(sent, MessageType.ACTION, 1)
-    assert len([v for v in fwd if v > 0]) >= 18
-    assert 0 not in fwd[: fwd.index(0)] if 0 in fwd else True  # no interior zero before the tail
+    last_nz = max(i for i, v in enumerate(fwd) if v > 0)
+    assert last_nz >= 18
+    assert all(v > 0 for v in fwd[:last_nz]), "MOVE_FORWARD hit 0 mid-sweep"
+    # natural EMA falloff is ~1500 wire units/tick; a cut is a near-full drop.
+    for a, b in zip(fwd[:last_nz], fwd[1 : last_nz + 1]):
+        assert b >= a - 2500, f"MOVE_FORWARD stuttered {a} -> {b}"
 
 
-def test_finding_3_forward_value_rises_monotonically_with_gaze_eccentricity() -> None:
-    last = -1
-    for dy in (30, 60, 100, 160, 230):
-        pipe, sent = _pipe([InputSample((320, 240 - dy), False, False, False)] * 12)
+def test_finding_3_forward_and_turn_scale_together_with_eccentricity() -> None:
+    # +y drives MOVE_FORWARD, +x drives TURN_RIGHT. Compare at matching
+    # NORMALIZED eccentricity (nx == ny), since the half-extents differ
+    # (320 vs 240): forward's wire curve must track turn's -> as proportional.
+    fwd_vals, turn_vals = [], []
+    for frac in (0.35, 0.5, 0.7, 0.9, 1.0):  # all past the 0.28 dead zone
+        dx, dy = round(frac * 320), round(frac * 240)
+        pf, sf = _pipe([InputSample((320, 240 - dy), False, False, False)] * 12)
+        pt, st = _pipe([InputSample((320 + dx, 240), False, False, False)] * 12)
         for i in range(12):
-            pipe.tick(now=i)
-        v = _values(sent, MessageType.ACTION, 1)[-1]
-        assert v >= last
-        last = v
-    assert last == 10000  # the outer sample saturates
+            pf.tick(now=i)
+            pt.tick(now=i)
+        f = _values(sf, MessageType.ACTION, 1)
+        t = _values(st, MessageType.TURN, 4)
+        assert f and t, f"no frame at frac {frac}"
+        fwd_vals.append(f[-1])
+        turn_vals.append(t[-1])
+    assert fwd_vals == sorted(fwd_vals) and turn_vals == sorted(turn_vals)
+    assert fwd_vals[-1] == 10000 and turn_vals[-1] == 40  # both saturate
+    for f, t in zip(fwd_vals, turn_vals):
+        assert abs(f / 10000 - t / 40) <= 1 / 20   # normalized curves agree within a quantum
 
 
 def test_activation_edge_produces_a_fire_pulse() -> None:
@@ -746,8 +797,8 @@ def test_pause_edge_toggles_paused_and_sends_one_discrete() -> None:
     assert sent.count(Message.discrete(20)) == 1
 
 
-def test_release_all_resets_the_filter_emits_zeros_and_clears_paused() -> None:
-    hold = InputSample((639, 240), False, False, False)
+def test_release_all_resets_the_filter_emits_one_zero_per_axis_and_clears_paused() -> None:
+    hold = InputSample((639, 478), False, False, False)  # diagonal: both axes held
     pipe, sent = _pipe([hold] * 10)
     for i in range(10):
         pipe.tick(now=i)
@@ -755,9 +806,8 @@ def test_release_all_resets_the_filter_emits_zeros_and_clears_paused() -> None:
     sent.clear()
     pipe.release_all()
     assert pipe.paused is False
-    assert sent and all(
-        m.value == 0 for m in sent if m.type in (MessageType.TURN, MessageType.ACTION)
-    )
+    assert _values(sent, MessageType.ACTION, 2) == [0]  # MOVE_BACKWARD: exactly one 0
+    assert _values(sent, MessageType.TURN, 4) == [0]    # TURN_RIGHT: exactly one 0
     # filter reset: the very next dead-zone tick emits nothing new
     sent.clear()
     pipe._source.queue.append(InputSample((320, 240), False, False, False))
@@ -792,7 +842,7 @@ def test_widget_property_exposes_the_filtered_widget(qtbot) -> None:
 - [ ] **Step 2: Run the tests to verify they fail**
 
 Run: `& "E:\Projectos\raven-agent-hud\.venv\Scripts\python.exe" -m pytest tests/test_input_pipeline.py tests/test_input_source_qt.py::test_widget_property_exposes_the_filtered_widget -q`
-Expected: FAIL — `AttributeError: 'InputPipeline' object has no attribute '_stick'` / `'SimulatorInputSource' object has no attribute 'widget'`.
+Expected: FAIL — `test_widget_property...` raises `AttributeError: 'SimulatorInputSource' object has no attribute 'widget'`; the pipeline tests raise `TypeError` (the `_pipe` helper passes `surface=None`, which the pre-Task-3 `__init__` forwards into `GazeStick(*None)`). Re-run with `-x` after Step 3 and confirm each test's first failure is behavioural.
 
 - [ ] **Step 3: Modify the implementations**
 
@@ -896,35 +946,41 @@ git commit -m "feat(input): pipeline builds the stick from the viewport surface 
 - Modify test: `tests/test_host_widget_qt.py` (+1 test)
 
 **Interfaces:**
-- Consumes: `InputPipeline(source, send, *, surface=..., spoken_fire=...)` (Task 3); `SimulatorInputSource` (Task 3).
-- Produces: no new interface — a behavioural guarantee that the non-injected pipeline's `GazeStick` centre is `(320, 240)` for the real `(0, 80, 640, 480)` viewport.
+- Consumes: `InputPipeline(source, send, *, surface=..., spoken_fire=...)` (Task 3); `SimulatorInputSource` (Task 3). `pewpew.host_widget` imports `InputPipeline` (name `pewpew.host_widget.InputPipeline`).
+- Produces: no new interface — a behavioural guarantee that `showEvent` passes `surface=(viewport.width(), viewport.height())` **explicitly** (the R14 product path — it must not lean on the Task-3 `surface=None` fallback).
 
 - [ ] **Step 1: Write the failing test**
 
-Add to `tests/test_host_widget_qt.py` (near the other non-injected `_host` tests, using the module's existing `_Engine` / `_Reader` / `_Server` fakes and `SimpleNamespace`):
+Add to `tests/test_host_widget_qt.py` (near the other non-injected `_host` tests, using the module's existing `_Engine` / `_Reader` / `_Server` fakes and `SimpleNamespace`; add `from pewpew.input.pipeline import InputPipeline` to the imports if absent):
 
 ```python
-def test_showevent_builds_the_pipeline_stick_on_the_viewport_surface(qtbot) -> None:
-    """Finding-1 regression guard at the host layer: no injected pipeline, so
-    showEvent builds the real InputPipeline with surface = the 640x480 viewport."""
+def test_showevent_passes_the_viewport_surface_explicitly_to_the_pipeline(qtbot, monkeypatch) -> None:
+    """Finding-1 host-layer guard: showEvent must construct InputPipeline with an
+    EXPLICIT surface kwarg, not rely on the surface=None fallback."""
+    captured: dict = {}
+    real_init = InputPipeline.__init__
+
+    def spy_init(self, source, send, *, surface=None, spoken_fire=None):
+        captured["surface"] = surface
+        real_init(self, source, send, surface=surface, spoken_fire=spoken_fire)
+
+    monkeypatch.setattr("pewpew.host_widget.InputPipeline.__init__", spy_init)
     engine = _Engine()
     engine.start = lambda *, ipc_address=None: 8128
-    reader = _Reader()
-    server = _Server()
     config = SimpleNamespace(viewport_width=640, viewport_height=480)
-    host = DoomHostWidget(config, engine=engine, frame_reader=reader, ipc_server=server)
+    host = DoomHostWidget(config, engine=engine, frame_reader=_Reader(), ipc_server=_Server())
     qtbot.addWidget(host)
     host.show()
     qtbot.waitExposed(host)
-    stick = host._pipeline._stick
-    assert (stick._cx, stick._cy) == (320, 240)
+    assert captured["surface"] == (640, 480)   # explicit, not None
+    assert host._pipeline._stick._cx == 320 and host._pipeline._stick._cy == 240
     host.cleanup()
 ```
 
 - [ ] **Step 2: Run the test to verify it fails**
 
-Run: `& "E:\Projectos\raven-agent-hud\.venv\Scripts\python.exe" -m pytest tests/test_host_widget_qt.py::test_showevent_builds_the_pipeline_stick_on_the_viewport_surface -q`
-Expected: FAIL — the pipeline is built with the default `surface=None`, `SimulatorInputSource.widget` is the viewport (640×480) so `_cy` is `240`… actually this passes by accident once Task 3 lands. To make the test *meaningful as a host-layer guard*, it must fail if the host stops passing `surface` AND the source stops exposing `widget`. Keep it as a guard; before Task 4's edit it already passes via the Task-3 fallback. That is acceptable — the assertion still catches a regression to a 640×640 constant. Proceed to Step 3 to make the host pass `surface` explicitly (the product path per R14).
+Run: `& "E:\Projectos\raven-agent-hud\.venv\Scripts\python.exe" -m pytest tests/test_host_widget_qt.py::test_showevent_passes_the_viewport_surface_explicitly_to_the_pipeline -q`
+Expected: FAIL — before Step 3, `showEvent` builds `InputPipeline(SimulatorInputSource(self.viewport), self._server.send)` with no `surface` kwarg, so `captured["surface"]` is `None` and `assert captured["surface"] == (640, 480)` fails. (This is a real RED: the assertion distinguishes the explicit product path from the Task-3 fallback.)
 
 - [ ] **Step 3: Modify the implementation**
 
@@ -961,19 +1017,22 @@ git commit -m "feat(host): build the input pipeline with the explicit viewport s
 - [ ] **Step 6: Full Python suite green**
 
 Run: `& "E:\Projectos\raven-agent-hud\.venv\Scripts\python.exe" -m pytest -q`
-Expected: all pass, 6 POSIX-only skips. If `tests/test_distribution_metadata.py::test_c_patch_constants_match_the_python_enums` fails now it is because Task 2 added `MOVE_MAGNITUDE_SCALE` but the C patch has no `IPC_MOVE_WIRE_MAX` yet — that is expected and fixed in Task 5/Task 7. Note it and continue; do **not** weaken that test.
+Expected: **all pass**, 6 POSIX-only skips. (The existing `test_c_patch_constants_match_the_python_enums` only greps `AC_*` / `MT_*` / `IPC_FRAME_SIZE` / `IPC_PROTOCOL_VERSION` / `IPC_TURN_CLAMP`; adding `MOVE_MAGNITUDE_SCALE` in Task 2 does not touch it — it stays green. Its `IPC_MOVE_WIRE_MAX` extension is added in Task 7, co-located with the `#define` from Task 5a.) If anything fails here, stop and fix it — do not proceed to Task 5.
 
 ---
 
 ## Task 5: `patches/crispy-doom-ipc-input.diff` — analog forward, coalescing, watchdog
 
 **Files:**
-- Regenerate: `patches/crispy-doom-ipc-input.diff` (adds a `src/doom/g_game.c` hunk; rewrites `src/i_ipc_input.c` / `.h`)
-- Build artifact (not committed): `build/crispy/` rebuilt
+- Regenerate: `patches/crispy-doom-ipc-input.diff` — rewrites `src/i_ipc_input.c` / `.h`, adds one `src/doom/g_game.c` hunk (the diff is a single atomic artifact covering all 6 engine files).
+- Modify test: `tests/test_distribution_metadata.py` (+`test_ipc_patch_touches_only_the_allowed_engine_files` — the automated §14 file-set / line-ceiling guard, added here so it protects the diff as it is produced; the constant-match extension is Task 7).
+- Build artifact (not committed): `build/crispy/` rebuilt.
+
+**Review surface for this task:** the regenerated `patches/crispy-doom-ipc-input.diff`, the `build_crispy.py --check` transcript, the `git apply --stat` output, and the MSYS2 build log. There is one committable artifact (the diff), so this task cannot be sub-committed; the reviewer reads the diff against these steps.
 
 **Interfaces:**
 - Consumes: the wire frame (unchanged); `MOVE_MAGNITUDE_SCALE = 10000` from Python (mirrored as `IPC_MOVE_WIRE_MAX`).
-- Produces: a `crispy-doom.exe` whose `MOVE_*` frames drive an analog `cmd->forwardmove` contribution; `git apply --check` still passes via `build_crispy.py --check`.
+- Produces: a `crispy-doom.exe` whose `MOVE_*` frames drive an analog `forwardmove` contribution via `IPC_Input_ForwardMove()`; `git apply --check` still passes via `build_crispy.py --check`.
 
 - [ ] **Step 1: Confirm mechanism 1 against the real source**
 
@@ -995,14 +1054,17 @@ The fold point is **immediately before `if (forward > MAXPLMOVE)`** (currently l
 Use Git-for-Windows `git` (e.g. `& "C:\Program Files\Git\bin\git.exe"`). From `E:\Projectos\doomed_prism`:
 
 ```bash
-git -C build/crispy reset --hard 0a022e0ee6c74d9bab173ed9ee5212312e90ce3a
-git -C build/crispy clean -fd -- src/
-git -C build/crispy apply ../../patches/crispy-doom-fb-export.diff
-git -C build/crispy -c user.email=x@x -c user.name=x commit -aqm "P1 BASE (temp)"
-git -C build/crispy apply ../../patches/crispy-doom-ipc-input.diff
+GG='C:/Program Files/Git/bin/git.exe'
+"$GG" -C build/crispy config --get diff.noprefix        # must print nothing
+"$GG" -C build/crispy config --get diff.mnemonicPrefix  # must print nothing
+"$GG" -C build/crispy reset --hard 0a022e0ee6c74d9bab173ed9ee5212312e90ce3a
+"$GG" -C build/crispy clean -fd -- src/
+"$GG" -C build/crispy apply ../../patches/crispy-doom-fb-export.diff
+"$GG" -C build/crispy -c user.email=x@x -c user.name=x commit -aqm "P1 BASE (temp)"
+"$GG" -C build/crispy apply ../../patches/crispy-doom-ipc-input.diff
 ```
 
-The working tree now has patch 1 committed and patch 2 (the current version) applied but unstaged. Edit the four source files below, then regenerate the diff in Step 7.
+The working tree now has patch 1 committed and patch 2 (the current version) applied but unstaged. Edit the source files below, then regenerate the diff in Step 7. **Recovery:** if anything aborts between here and Step 7, restore with `"$GG" -C build/crispy reset --hard 0a022e0ee6c74d9bab173ed9ee5212312e90ce3a && "$GG" -C build/crispy clean -fd -- src/` (the temp `P1 BASE` commit is discarded, `build/` is gitignored so the outer repo is untouched).
 
 - [ ] **Step 3: Rewrite `build/crispy/src/i_ipc_input.h`**
 
@@ -1093,7 +1155,7 @@ int IPC_Input_ForwardMove(void)
 }
 ```
 
-(f) In `ipc_apply`, **delete** the whole `case MT_ACTION:` block and the whole `case MT_TURN:` block (they are handled in the pump now for coalescing). Leave `MT_PULSE`, `MT_DISCRETE`, `MT_BYE`, `default`.
+(f) In `ipc_apply`, **delete** the whole `case MT_ACTION:` block and the whole `case MT_TURN:` block (they are handled in the pump now for coalescing). Leave `MT_PULSE`, `MT_DISCRETE`, `MT_BYE`, `default`. Since `MT_TURN` was the only user of `d`, change the declaration `int slot, i, key, d;` → `int slot, i, key;` (avoids a `-Wall` unused-variable warning; `build/crispy/CMakeLists.txt` compiles with `-Wall`, no `-Werror`).
 
 (g) Replace `IPC_Input_Pump` entirely:
 
@@ -1191,51 +1253,71 @@ In `build/crispy/src/doom/g_game.c`:
 
 ```
 
-- [ ] **Step 6: Build and probe (Windows)**
+(This adds ~7 lines to `g_game.c` — the include, the 3-line comment, one executable line, one blank line. Spec §10/§14 call it "one clearly-marked vanilla line" of executable code; it is well under the ≤ 420 net-added ceiling.)
 
-```bash
-export PATH="/c/msys64/ucrt64/bin:$PATH"
-& "E:\Projectos\raven-agent-hud\.venv\Scripts\python.exe" scripts/build_crispy.py
+- [ ] **Step 6: Add the automated file-set / line-ceiling guard**
+
+Add to `tests/test_distribution_metadata.py` (it protects the diff Step 7 produces):
+
+```python
+def test_ipc_patch_touches_only_the_allowed_engine_files() -> None:
+    import re
+
+    diff = (ROOT / "patches" / "crispy-doom-ipc-input.diff").read_text(encoding="utf-8")
+    touched = set(re.findall(r"^diff --git a/(\S+) b/\S+", diff, re.MULTILINE))
+    allowed = {
+        "src/i_ipc_input.c", "src/i_ipc_input.h", "src/d_loop.c",
+        "src/i_video.c", "src/CMakeLists.txt",
+        "src/doom/g_game.c",  # R14 mechanism 1: the forwardmove fold
+    }
+    assert touched and touched <= allowed, f"unexpected files: {touched - allowed}"
+    added = sum(1 for ln in diff.splitlines() if ln.startswith("+") and not ln.startswith("+++"))
+    assert added <= 420, f"IPC patch added {added} lines (> 420 ceiling)"
 ```
 
-Expected: builds `build/crispy/build/src/crispy-doom.exe`. Then run a live handshake + framebuffer probe (reuse the pattern from `scripts/ci_ipc_smoke.py` locally, or the scratchpad launch script): start an `IpcServer`, launch the exe with `DOOMED_PRISM_IPC_ADDR` + `DOOMED_PRISM_FB_NAME` + `DOOMED_PRISM_WARP="1 1"`, `poll()` to `is_connected`, stream a `Message.action(MOVE_FORWARD, 10000)` for ~2 s then `Message.action(MOVE_FORWARD, 0)`, confirm `frame_counter` keeps advancing and no `proc.poll()`.
+It stays RED (`FileNotFoundError` if the diff is mid-regen, or a stale-diff mismatch) until Step 7 lands the regenerated diff.
 
 - [ ] **Step 7: Regenerate the committed diff**
 
 ```bash
-git -C build/crispy add -A src/
-git -C build/crispy diff --cached HEAD -- \
+GG='C:/Program Files/Git/bin/git.exe'
+"$GG" -C build/crispy add -A src/
+"$GG" -C build/crispy -c diff.noprefix=false -c diff.mnemonicPrefix=false \
+  diff --cached HEAD -- \
   src/i_ipc_input.c src/i_ipc_input.h src/d_loop.c src/i_video.c \
   src/CMakeLists.txt src/doom/g_game.c > patches/crispy-doom-ipc-input.diff
-git -C build/crispy reset --hard 0a022e0ee6c74d9bab173ed9ee5212312e90ce3a
-git -C build/crispy clean -fd -- src/
+"$GG" -C build/crispy reset --hard 0a022e0ee6c74d9bab173ed9ee5212312e90ce3a
+"$GG" -C build/crispy clean -fd -- src/
 ```
 
-Then verify the regenerated series still composes and rebuilds:
+The explicit `-c diff.noprefix=false -c diff.mnemonicPrefix=false` guarantees `a/`…`b/` headers (which `git apply` in `build_crispy.py` and the Step-6 regex both require). Then verify the series composes and the file-set guard passes:
 
 ```bash
 & "E:\Projectos\raven-agent-hud\.venv\Scripts\python.exe" scripts/build_crispy.py --check
+& "E:\Projectos\raven-agent-hud\.venv\Scripts\python.exe" -m pytest tests/test_distribution_metadata.py -q
+git apply --stat patches/crispy-doom-ipc-input.diff
+```
+
+Expected: `--check` exits 0 ("restore + real apply p1 + apply --check p2"); `test_ipc_patch_touches_only_the_allowed_engine_files` PASS; `--stat` shows exactly the 6 allowed files.
+
+- [ ] **Step 8: Build the patched engine and probe (Windows)**
+
+```bash
 export PATH="/c/msys64/ucrt64/bin:$PATH"
 & "E:\Projectos\raven-agent-hud\.venv\Scripts\python.exe" scripts/build_crispy.py
 ```
 
-Expected: `--check` exits 0 ("restore + real apply p1 + apply --check p2"), the build succeeds. Confirm the diffstat:
+Expected: builds `build/crispy/build/src/crispy-doom.exe` clean (no `-Wall` warning for `d`). Then run a live handshake + framebuffer probe (the `scripts/ci_ipc_smoke.py` pattern, or the scratchpad launch script): start an `IpcServer`, launch the exe with `DOOMED_PRISM_IPC_ADDR` + `DOOMED_PRISM_FB_NAME` + `DOOMED_PRISM_WARP="1 1"`, `poll()` to `is_connected`, stream `Message.action(MOVE_FORWARD, 10000)` for ~2 s then `Message.action(MOVE_FORWARD, 0)`, confirm `frame_counter` keeps advancing and `proc.poll()` stays `None`. (Scale/sign/direction correctness of the C fold is a manual-gate visual item per §13/§17; this probe only proves the engine does not crash on a mid-range value.)
 
-```bash
-git apply --stat patches/crispy-doom-ipc-input.diff
-```
-
-Expected files only: `src/CMakeLists.txt`, `src/d_loop.c`, `src/doom/g_game.c`, `src/i_ipc_input.c`, `src/i_ipc_input.h`, `src/i_video.c`; total added lines ≤ 420.
-
-- [ ] **Step 8: Run the Python suite**
+- [ ] **Step 9: Run the Python suite**
 
 Run: `& "E:\Projectos\raven-agent-hud\.venv\Scripts\python.exe" -m pytest -q`
-Expected: `tests/test_distribution_metadata.py::test_c_patch_constants_match_the_python_enums` still fails (the assertions for `IPC_MOVE_WIRE_MAX` are added in Task 7); everything else green. Do not fix it here.
+Expected: **all green** (6 POSIX-only skips). The existing `test_c_patch_constants_match_the_python_enums` still passes (its `IPC_MOVE_WIRE_MAX` extension is Task 7); the new `test_ipc_patch_touches_only_the_allowed_engine_files` passes.
 
-- [ ] **Step 9: Commit**
+- [ ] **Step 10: Commit**
 
 ```bash
-git add patches/crispy-doom-ipc-input.diff
+git add patches/crispy-doom-ipc-input.diff tests/test_distribution_metadata.py
 git commit -m "feat(engine): analog forwardmove, per-drain coalescing, stale watchdog (R14 task 5)"
 ```
 
@@ -1253,13 +1335,13 @@ git commit -m "feat(engine): analog forwardmove, per-drain coalescing, stale wat
 
 - [ ] **Step 1: Edit `scripts/ci_ipc_smoke.py`**
 
-Add the import:
+**Replace** the existing `from pewpew.input.actions import Action  # noqa: E402` line (~line 21) with:
 
 ```python
 from pewpew.input.actions import Action, MOVE_MAGNITUDE_SCALE, TURN_MAX_MOUSE_DELTA  # noqa: E402
 ```
 
-Replace the flood loop (the `for i in range(FLOOD_FRAMES):` block and the assertions after it) with:
+Replace the flood loop (the `for i in range(FLOOD_FRAMES):` block and the assertions after it) with the following — it lives inside the `try:` block, so paste it at **8-space** base indent (the snippet below shows 4-space; re-indent on paste):
 
 ```python
     RAMP_START, RAMP_LEN = 120, 160          # 80 frames forward 0->max->0, then 80 backward
@@ -1337,41 +1419,27 @@ git commit -m "test(ci): flood the analog MOVE path in the IPC runtime smoke (R1
 - Modify: `README.md` (one status line)
 
 **Interfaces:**
-- Consumes: `patches/crispy-doom-ipc-input.diff` (Task 5); `MOVE_MAGNITUDE_SCALE` (Task 2).
-- Produces: a green `test_c_patch_constants_match_the_python_enums` plus a new file-set allow-list test.
+- Consumes: `patches/crispy-doom-ipc-input.diff` (Task 5, regenerated); `MOVE_MAGNITUDE_SCALE` (Task 2).
+- Produces: `test_c_patch_constants_match_the_python_enums` extended with the C↔Python `MOVE_MAGNITUDE_SCALE`/`IPC_MOVE_WIRE_MAX` equality and the documented `10000 → 50` mapping contract. (The file-set / line-ceiling test was added in Task 5 Step 6.)
 
-- [ ] **Step 1: Update the tests**
+- [ ] **Step 1: Extend the constant-match test**
 
-In `tests/test_distribution_metadata.py`, extend `test_c_patch_constants_match_the_python_enums` — after the existing `turn_clamp` assertion add:
+In `tests/test_distribution_metadata.py::test_c_patch_constants_match_the_python_enums` — after the existing `turn_clamp` assertion add:
 
 ```python
     from pewpew.input.actions import MOVE_MAGNITUDE_SCALE
 
-    move_wire_max = int(
-        re.search(r"#define\s+IPC_MOVE_WIRE_MAX\s+(\d+)", diff).group(1)
-    )
+    move_wire_max = int(re.search(r"#define\s+IPC_MOVE_WIRE_MAX\s+(\d+)", diff).group(1))
+    move_max_forwardmove = int(re.search(r"#define\s+MOVE_MAX_FORWARDMOVE\s+(\d+)", diff).group(1))
+    stale_pumps = int(re.search(r"#define\s+IPC_MOVE_STALE_PUMPS\s+(\d+)", diff).group(1))
+    # Shared full-scale: C #define == Python constant.
     assert move_wire_max == MOVE_MAGNITUDE_SCALE == 10000
-    assert re.search(r"#define\s+MOVE_MAX_FORWARDMOVE\s+50\b", diff)
-    assert re.search(r"#define\s+IPC_MOVE_STALE_PUMPS\s+\d+", diff)
-```
-
-Add a new test:
-
-```python
-def test_ipc_patch_touches_only_the_allowed_engine_files() -> None:
-    import re
-
-    diff = (ROOT / "patches" / "crispy-doom-ipc-input.diff").read_text(encoding="utf-8")
-    touched = set(re.findall(r"^diff --git a/(\S+) b/\S+", diff, re.MULTILINE))
-    allowed = {
-        "src/i_ipc_input.c",
-        "src/i_ipc_input.h",
-        "src/d_loop.c",
-        "src/i_video.c",
-        "src/CMakeLists.txt",
-        "src/doom/g_game.c",  # R14 mechanism 1: the forwardmove fold
-    }
-    assert touched <= allowed, f"unexpected files in the IPC patch: {touched - allowed}"
+    # C-only constants: present with the spec's exact values (R11).
+    assert move_max_forwardmove == 50    # DOOM forwardmove[1] run value
+    assert stale_pumps == 6
+    # The documented forwardmove mapping contract the C side must implement.
+    assert "10000" in diff and "MOVE_MAX_FORWARDMOVE" in diff
+    assert re.search(r"IPC_Input_ForwardMove", diff)  # the accessor g_game.c folds
 ```
 
 - [ ] **Step 2: Update the README status line**
@@ -1390,13 +1458,13 @@ Keep the `## License` section untouched (it already names "the frame-export and 
 - [ ] **Step 3: Run the tests**
 
 Run: `& "E:\Projectos\raven-agent-hud\.venv\Scripts\python.exe" -m pytest tests/test_distribution_metadata.py -q`
-Expected: PASS (all — including the previously-failing constants test).
+Expected: PASS. RED before Step 1's edit: the new `re.search(r"#define\s+IPC_MOVE_WIRE_MAX...")` returns `None` → `AttributeError`? No — Task 5 already added the `#define`, so it matches. The genuine RED here is only if Task 5's diff is missing a constant; run it and confirm green.
 
 - [ ] **Step 4: Commit**
 
 ```bash
 git add tests/test_distribution_metadata.py README.md
-git commit -m "test(dist): assert the new C constants and the patch file-set; README (R14 task 7)"
+git commit -m "test(dist): C<->Python constant equality + README radial-stick line (R14 task 7)"
 ```
 
 ---
@@ -1483,9 +1551,9 @@ In `docs/validation/milestone-3a-checklist.md`:
 
 (d) The "Record the patch-2 diffstat" step (lines ~54–64) — after `and `src/CMakeLists.txt`` add `, and one clearly-marked hunk in `src/doom/g_game.c` (the R14 `forwardmove` fold)`.
 
-(e) The "Hard decision rule" list — replace the four bullets with the five from spec §17 (verbatim): `PASS — IPC input path viable` (R14 wording), `PASS (degraded forward) — IPC input path viable, forward single-speed`, `FAIL — IPC input path insufficient`, `BLOCKED/RETRY — implementation or environment failure`, `PENDING — incomplete evidence`.
+(e) **The Per-mode-evidence Night row (~line 191):** replace `Full dynamic proof: gaze steering, progressive turn, a fired shot, and Enter-pause` with `Full dynamic proof: gaze steering the radial stick, proportional turn and forward from one vector, a fired shot, and Enter-pause`. Add one line under the table: "During the movement checks, save the outgoing `ACTION.value` / `TURN.value` streams to `artifacts/milestone-3/` and attach a quick value-vs-eccentricity plot — a semi-objective proportionality artifact."
 
-(f) Add one line to "Per-mode evidence": "During the movement checks, save the outgoing `ACTION.value` / `TURN.value` streams to `artifacts/milestone-3/` and attach a quick value-vs-eccentricity plot — a semi-objective proportionality artifact."
+(f) **The "Hard decision rule" list — replace the four bullets with the FULL FIVE spec §17 decision paragraphs, copied verbatim** (`## 17` in the spec): `PASS — IPC input path viable` (its whole R14 paragraph, which carries the substrings `proportional forward/back from one vector` and `backward as reachable as forward` that `test_validation_docs_m3.py` asserts present), `PASS (degraded forward) — IPC input path viable, forward single-speed`, `FAIL — IPC input path insufficient`, `BLOCKED/RETRY — implementation or environment failure`, `PENDING — incomplete evidence`.
 
 - [ ] **Step 4: Rewrite the result template geometry + decisions**
 
@@ -1495,7 +1563,7 @@ In `docs/validation/milestone-3a-result.md`:
 
 ```markdown
 | Turn: left of the dead-zone circle turns left; right turns right; stop within ~3–5 ticks | _fill in_ | |
-| Progressive turn — faster the farther from the circle, smoothly | _fill in_ | |
+| Turn rate rises with distance from the circle, smoothly, no step | _fill in_ | |
 | Forward/back proportional to gaze eccentricity (or degraded single-speed — say which) | _fill in_ | |
 | Backward as reachable and as fast as forward (no ~9 px sliver) | _fill in_ | |
 | Diagonal sweep never makes forward stutter or cut out | _fill in_ | |
@@ -1503,12 +1571,20 @@ In `docs/validation/milestone-3a-result.md`:
 
 (b) The lifecycle table row for "Kill PewPew" — "DOOM stops turning **and stops moving forward**, keeps running on SDL".
 
-(c) The "Final decision" block and the trailing decision list — replace with the five spec-§17 strings, `Final decision:` still starting as `PENDING — incomplete evidence`.
+(c) **The "Note on evidence depth" paragraph (~line 108):** replace `gaze steering, progressive turn, a fired shot, and Enter-pause` with `gaze steering the radial stick, proportional turn and forward, a fired shot, and Enter-pause`.
 
-- [ ] **Step 5: Run the tests**
+(d) The "Final decision" block and the trailing decision list — replace with the **full five spec §17 decision paragraphs verbatim** (as in checklist Step 3(f)); `Final decision:` still starts as `PENDING — incomplete evidence`.
+
+- [ ] **Step 5: Grep for orphaned zone vocabulary, then run the tests**
+
+```bash
+grep -nE "progressive turn|turn band|upper band|lower band|upper corner" docs/validation/milestone-3a-checklist.md docs/validation/milestone-3a-result.md
+```
+
+Expected: **no matches**. Then:
 
 Run: `& "E:\Projectos\raven-agent-hud\.venv\Scripts\python.exe" -m pytest tests/test_validation_docs_m3.py -q`
-Expected: PASS.
+Expected: PASS (both the five-decision-string test and the present/absent phrase test).
 
 - [ ] **Step 6: Commit**
 
@@ -1532,11 +1608,32 @@ Expected: all tests pass (6 POSIX-only skips), both scans exit 0, no whitespace 
 
 ## Self-Review
 
-**1. Spec coverage.** R14 model → Task 1. R14 "Router" quantiser → Task 2. §9 `widget` accessor + §7 `surface` → Task 3. §4 `host_widget` explicit surface → Task 4. §10 (analog `forwardmove`, coalescing, watchdog, `#define`s, `g_game.c` fold, mechanism-1 record) → Task 5. §13 analog-MOVE flood → Task 6. §14/§15 constant-match + file allow-list, README → Task 7. §17 five decision strings + geometry, §15 `test_validation_docs_m3` → Task 8. §12/R9 lifecycle wording lands in Task 8's checklist edits (d)/(c). §18 exit criteria = the union of Task 6 (CI) + Task 8 (result). The corner unit-vector test, the finding-2 sweep test, the `__init__` asserts, `reset()`, `EMA_ZERO_EPSILON` snap → Task 1 tests. F1/F2/F3 pipeline guards → Task 3 tests; host-layer F1 → Task 4. No spec section is left without a task.
+Revised after two separate auditor passes (`plan-auditor-1.md`, `plan-auditor-2.md`, 2026-09-07): 2 CRITICAL + 3 HIGH were test-code bugs, all fixed below; auditor 1 fully compile-traced the Task-5 C rewrite and found it sound.
 
-**2. Placeholder scan.** Every code step carries real code; every test step carries runnable assertions; the C rewrites give the exact function bodies; the diff-regeneration gives the exact git commands with the pinned commit. No "TBD" / "add error handling" / "similar to Task N".
+**1. Execution trace of every numeric test assertion** (values from the Task-1/2 formulas against each test's inputs; a 640×480 surface has `_cy = 240`, `_half_h = 240`, so the dead zone reaches `dy = 0.28 × 240 = 67 px` and the curve knee is ~`dy 82`):
 
-**3. Type consistency.** `GazeStick.resolve -> tuple[float, float]` (Task 1) is consumed as `vec` by `GazeVectorFilter.update(vec, now)` (Task 1) and by `InputPipeline.tick` (Task 3). `GazeVectorFilter.update -> frozenset[HeldAction]` feeds `ActionRouter.set_held(frozenset[HeldAction])` (Task 2) unchanged. `MOVE_MAGNITUDE_SCALE` is defined once (Task 2), imported by Task 6 and Task 7. `_stick` / `_filter` private names are used consistently in Tasks 3–4 tests. The C `IPC_Input_ForwardMove()` declared in `.h` (Task 5 step 3), defined in `.c` (step 4e), called in `g_game.c` (step 5) — one name. `IPC_MOVE_WIRE_MAX` is `#define`d in the C patch (Task 5) and asserted `== MOVE_MAGNITUDE_SCALE` (Task 7).
+| Test | Input | Expected | Note |
+| --- | --- | --- | --- |
+| `test_dead_zone_circle_interior…` | `(320, 240)`, `(320, 192)` | `(0.0, 0.0)` | `dy 48 → r 0.2 ≤ 0.28` |
+| `test_a_corner_gaze…` | `(639, 0)` | `hypot(fx,fy) ≈ 1.0`, `|fx|,|fy| < 1` | `r_raw 1.41`, unclamped-norm |
+| `test_a_nearby_nonzero_dropout…` | 7× `(0,-0.8)` then `(0,-0.78)` | `dip > 0.9·before` | stays on `ema_alpha` |
+| `test_a_genuine_zero_input_drops_fast…` | 7× `(0,-0.8)` then `(0,0)` | `0.15·before < dip < 0.30·before` | `release_alpha` → ×0.2 |
+| `test_release_alpha_stops…` | 4× `(0.9,0)` then `(0,0)…` | empty by `n ≤ 6` | ×0.2/tick, snap at ~1e-3 |
+| `test_finding_2 / _forward_never_cuts_out` (gaze + pipeline) | 31-pt arc `(320,90)→(470,240)` | no interior zero, no >3-quantum step | rotating vector, `_ex` keeps `hypot > ε` |
+| `test_finding_3_forward_and_turn_scale_together` | `frac (0.35…1.0)`, `dx=frac·320`, `dy=frac·240` | `fwd`/`turn` streams sorted, both saturate, `|f/10000 − t/40| ≤ 1/20` | matching **normalized** eccentricity |
+| `test_finding_1…` | `(320,1)` fwd / `(320,478)` bwd | `|f_last − b_last| ≤ 500` | both saturate → 10000 |
+| `test_quantiser_pins…` | `0.75`, `0.99` | `7500`, `40` (rounds up) | literals, not `_q()` |
+| `test_a_sub_quantum_hold…` | `0.02`, `1.0`, `0.02`, `∅` | `[10000, 0]` | silent while newly held; one 0 on the fall |
+| `test_release_all_resets…` | held `(639,478)` diagonal | `_values(ACTION,2)==[0]`, `_values(TURN,4)==[0]` | exactly one 0 per axis |
+| host `test_showevent_passes_the_viewport_surface_explicitly…` | spy on `InputPipeline.__init__` | `captured["surface"] == (640,480)` | RED before Task 4 (kwarg `None`) |
+
+**2. Spec coverage.** R14 model → Task 1. R14 "Router" one-quantiser → Task 2. §9 `widget` accessor + §7 `surface` → Task 3. §4 `host_widget` explicit surface → Task 4. §10 (analog `forwardmove`, coalescing, `IPC_MOVE_STALE_PUMPS` watchdog, `#define`s, `g_game.c` fold, mechanism-1 record, the `-Wall` `d` fix) → Task 5. §13 analog-MOVE flood + `ci.yml` text → Task 6. §14 file-set/line-ceiling guard → Task 5 Step 6; §15 constant-match + README → Task 7. §17 five decision paragraphs + radial geometry + the two Night-row/evidence-note "progressive turn" edits + the grep step → Task 8. §12/R9 lifecycle wording → Task 8 (c). §18 = Task 6 (CI) ∪ Task 8 (result). **Explicit deferral:** R14 "Degraded forward mode" names "one gaze-independent C test covers (a)" — the bang-bang `±MOVE_MAX_FORWARDMOVE` clamp. That mode is only entered if the manual gate finds mechanism 1 insufficient; the plan chooses mechanism 1 and does **not** pre-build the degraded path or its test. If the gate selects it, a scoped follow-up adds the clamp + its test (§17 FAIL/degraded bullets already documented). No other spec line is unaddressed (the "correct the §9 comment" line in §16 is a no-op — the shipped `MouseMove` handler already clamps to `widget.width()/height()`, not a 640×640 literal).
+
+**3. Placeholder scan.** Every code step carries real code; every test step carries runnable assertions traced above; the C rewrites give exact function bodies; the diff-regeneration gives exact git commands with the pinned commit and a recovery note. No "TBD" / "add error handling" / "similar to Task N".
+
+**4. Type / name consistency.** `GazeStick.resolve -> tuple[float, float]` (Task 1) is consumed as `vec` by `GazeVectorFilter.update(vec, now)` (Task 1) and `InputPipeline.tick` (Task 3). `GazeVectorFilter.update -> frozenset[HeldAction]` feeds `ActionRouter.set_held(frozenset[HeldAction])` (Task 2, unchanged). `MOVE_MAGNITUDE_SCALE` defined once (Task 2), imported by Task 6 and Task 7. `_stick` / `_filter` private names consistent in Tasks 3–4 tests. C `IPC_Input_ForwardMove()` — declared in `.h` (Task 5 Step 3), defined in `.c` above `IPC_Input_Pump` (Step 4e), called in `g_game.c` (Step 5), asserted in the diff by Task 7. `IPC_MOVE_WIRE_MAX` `#define`d in Task 5, asserted `== MOVE_MAGNITUDE_SCALE == 10000` in Task 7. The Task-5 Step-6 file-set regex `^diff --git a/(\S+) b/\S+` matches Task-5 Step-7's `-c diff.noprefix=false`-forced output.
+
+**5. Ordering / reviewability.** Producer→consumer: T1 (gaze + `pipeline.py` keep-importable shim) → T2 (actions) → T3 (full pipeline) → T4 (host) → T5 (C diff) → T6 (CI smoke) → T7 (metadata) → T8 (docs). The per-task review for T1–T2 runs the scoped test files only; the full suite is green from T3 Step 4 onward. T5 has one committable artifact (the diff); its review surface is the diff + `--check` + `--stat` + build log.
 
 ---
 
