@@ -96,3 +96,9 @@ def test_f9_is_inert_without_the_env(qtbot, monkeypatch) -> None:
     src = SimulatorInputSource(w)
     QApplication.sendEvent(w, QKeyEvent(QEvent.Type.KeyPress, Qt.Key_F9, Qt.NoModifier))
     assert src.sample(0.0).debug_fire_edge is False
+
+
+def test_widget_property_exposes_the_filtered_widget(qtbot) -> None:
+    w = _widget(qtbot)
+    src = SimulatorInputSource(w)
+    assert src.widget is w

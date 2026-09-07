@@ -17,10 +17,13 @@ class InputPipeline:
         source: InputSource,
         send: Callable[[Message], None],
         *,
-        surface: tuple[int, int] = (640, 640),
+        surface: tuple[int, int] | None = None,
         spoken_fire: SpokenFireSource | None = None,
     ) -> None:
         self._source = source
+        if surface is None:
+            widget = source.widget
+            surface = (widget.width(), widget.height())
         self._stick = GazeStick(*surface)
         self._filter = GazeVectorFilter()
         self._fire = FireArbiter()

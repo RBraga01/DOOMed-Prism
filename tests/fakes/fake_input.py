@@ -9,9 +9,21 @@ _EMPTY = InputSample(
 )
 
 
+class _FakeWidget:
+    def __init__(self, w: int, h: int) -> None:
+        self._w, self._h = w, h
+
+    def width(self) -> int:
+        return self._w
+
+    def height(self) -> int:
+        return self._h
+
+
 class FakeInputSource:
-    def __init__(self, queue: list[InputSample]) -> None:
+    def __init__(self, queue: list[InputSample], *, widget_size=(640, 480)) -> None:
         self.queue = queue
+        self.widget = _FakeWidget(*widget_size)
 
     def sample(self, now: float) -> InputSample:
         return self.queue.pop(0) if self.queue else _EMPTY

@@ -22,6 +22,10 @@ class SimulatorInputSource(QObject):
         widget.setMouseTracking(True)
         widget.installEventFilter(self)
 
+    @property
+    def widget(self) -> QWidget:
+        return self._widget
+
     def eventFilter(self, obj: QObject, event: QEvent) -> bool:
         etype = event.type()
         if etype == QEvent.Type.MouseMove:
