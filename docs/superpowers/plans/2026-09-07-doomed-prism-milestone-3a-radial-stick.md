@@ -970,8 +970,7 @@ def test_showevent_passes_the_viewport_surface_explicitly_to_the_pipeline(qtbot,
     config = SimpleNamespace(viewport_width=640, viewport_height=480)
     host = DoomHostWidget(config, engine=engine, frame_reader=_Reader(), ipc_server=_Server())
     qtbot.addWidget(host)
-    host.show()
-    qtbot.waitExposed(host)
+    host.show()   # showEvent runs synchronously and builds the real pipeline
     assert captured["surface"] == (640, 480)   # explicit, not None
     assert host._pipeline._stick._cx == 320 and host._pipeline._stick._cy == 240
     host.cleanup()
