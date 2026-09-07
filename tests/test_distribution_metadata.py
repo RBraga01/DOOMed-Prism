@@ -33,6 +33,21 @@ def test_readme_names_both_engine_patches_in_the_license_section() -> None:
     assert diffs == {"crispy-doom-fb-export.diff", "crispy-doom-ipc-input.diff"}
 
 
+def test_ipc_patch_touches_only_the_allowed_engine_files() -> None:
+    import re
+
+    diff = (ROOT / "patches" / "crispy-doom-ipc-input.diff").read_text(encoding="utf-8")
+    touched = set(re.findall(r"^diff --git a/(\S+) b/\S+", diff, re.MULTILINE))
+    allowed = {
+        "src/i_ipc_input.c", "src/i_ipc_input.h", "src/d_loop.c",
+        "src/i_video.c", "src/CMakeLists.txt",
+        "src/doom/g_game.c",  # R14 mechanism 1: the forwardmove fold
+    }
+    assert touched and touched <= allowed, f"unexpected files: {touched - allowed}"
+    added = sum(1 for ln in diff.splitlines() if ln.startswith("+") and not ln.startswith("+++"))
+    assert added <= 420, f"IPC patch added {added} lines (> 420 ceiling)"
+
+
 def test_c_patch_constants_match_the_python_enums() -> None:
     import re
 
