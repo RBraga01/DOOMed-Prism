@@ -1281,13 +1281,15 @@ a pre-connected `socketpair` injector.
   `GazeStick(640, 480)` and `GazeStick(640, 640)` classify the same pixel
   differently. `__init__` rejects `outer_saturation <= dead_zone_radius` and
   `response_exponent <= 0`. `GazeVectorFilter.update` with an explicit `now`:
-  the output-vector EMA ramps toward a held vector at `MAGNITUDE_EMA_ALPHA` and
-  decays at the faster `RELEASE_EMA_ALPHA` when the input is `(0, 0)`, reaching
-  a zero output in ~3–5 ticks; a single-sample `(0, 0)` between two equal
-  vectors barely dents the output (EMA, not a hard drop); the EMA state resets
-  to `(0, 0)` after the output settles; `reset()` zeroes `e_prev` so a held
-  vector then `reset()` then a dead-zone sample yields the empty set with no
-  residual; the map yields ≤ one `MOVE_*` + ≤ one `TURN_*` with the right signs.
+  the output-vector EMA ramps toward a held vector at `MAGNITUDE_EMA_ALPHA`; a
+  one-sample dropout to a *nearby non-zero* vector barely dents the output
+  (still `ema_alpha` — EMA, not a hard drop); a genuine `(0, 0)` input applies
+  the faster `RELEASE_EMA_ALPHA` (an ~80 % single-tick drop — that is the
+  intended look-back-to-centre response), reaching a zero output in ~3–5 ticks;
+  the EMA state resets to `(0, 0)` after the output settles; `reset()` zeroes
+  `e_prev` so a held vector then `reset()` then a dead-zone sample yields the
+  empty set with no residual; the map yields ≤ one `MOVE_*` + ≤ one `TURN_*`
+  with the right signs.
 - **`pewpew.input.gaze` — the finding-2 sweep (R14).** Feed `GazeVectorFilter` a
   20–40-sample arc from `(cx, cy − k)` (pure forward) through `(cx + k·0.7, cy −
   k·0.7)` to `(cx + k, cy)` (pure right), stepping through where the pre-R14 zone
