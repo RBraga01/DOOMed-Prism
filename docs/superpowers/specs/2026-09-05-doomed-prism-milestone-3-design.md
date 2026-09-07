@@ -395,7 +395,8 @@ this order, recording the choice and the rejected options in the patch header:
    ipc_clamp(ipc_forwardmove)` immediately before DOOM's existing
    `forwardmove` clamp. Deterministic; touches no config global; independent of
    Crispy's analog-joystick mode. Cost: patch 2 gains one hunk in a vanilla
-   function (`g_game.c`), narrowing §10's "patch 2 edits no vanilla line"
+   function (`src/doom/g_game.c` — `G_BuildTiccmd` is the Doom game's, not the shared
+`d_loop.c`), narrowing §10's "patch 2 edits no vanilla line"
    property to "patch 2 edits one clearly-marked vanilla line".
 2. **Synthetic `ev_joystick`** — fold through DOOM's joystick path. More native,
    but the classic path is digital unless Crispy's analog controller mode is
@@ -885,11 +886,11 @@ style; upstream notices in edited files preserved):
 - `cmd->forwardmove` fold **(R14)** — if the Task-3 implementer selects R14's
   primary mechanism, one further hunk: `cmd->forwardmove += ipc_clamp(
   ipc_forwardmove);` immediately before DOOM's existing `forwardmove` clamp in
-  `G_BuildTiccmd` (`src/g_game.c`), guarded by `ipc_enabled`. This is the one
-  patch-2 edit to a vanilla (non-patch-1, non-new) line; it is a single clearly
-  commented addition and posts no event. If mechanism 2 or the fallback is
-  chosen instead, this hunk is absent and movement re-uses the `ev_joystick` or
-  key-event path.
+  `G_BuildTiccmd` (`src/doom/g_game.c`), guarded by `ipc_enabled`. This is the
+  one patch-2 edit to a vanilla (non-patch-1, non-new) line; it is a single
+  clearly commented addition and posts no event. If mechanism 2 or the fallback
+  is chosen instead, this hunk is absent and movement re-uses the `ev_joystick`
+  or key-event path.
 - **No signal handling in patch 2.** On a SIGINT/SIGTERM stop the process dies
   before `I_ShutdownGraphics` runs, but the kernel closes the client socket fd
   as the process exits, so the server (PewPew) sees EOF, runs its own
