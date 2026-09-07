@@ -1,8 +1,17 @@
 # DOOMed Prism — Milestone 3 Design: Input and the IPC Boundary
 
-Date: 2026-09-05
-Status: Design proposed. Revised once after three separate auditor passes
-(architecture/feasibility, spec-consistency, publication-safety). Not implemented.
+Date: 2026-09-05 (amended 2026-09-07 — R14, radial analog stick)
+Status: Plan 3a implemented on `feature/doomed-prism-m3` and CI-green; the
+Milestone 3a manual decision gate was run and surfaced three input-feel
+findings (backward unreachable, forward "cut" when turning, forward speed
+unbalanced against the ramped turn). **Ruling R14 (2026-09-07)** replaces the
+discrete-zone gaze model with a radial analog stick, which dissolves all three;
+it supersedes the forward-axis half of R5 and the movement half of R6, and
+rewrites §7. R14 was brainstormed with and approved by the user section by
+section, and is being audited by separate auditor agents before the affected 3a
+tasks are re-planned and re-implemented. The original three auditor passes
+(architecture/feasibility, spec-consistency, publication-safety) stand for
+everything R14 does not touch.
 Depends on:
 - `2026-09-02-doomed-prism-design.md` (§4 architecture / IPC boundary, §6 input
   design, §8 lifecycle and safety, §9 licensing, §10 validation, §11 delivery).
@@ -163,7 +172,7 @@ values are pinned in §5.
 
 | Category | Actions (3a) | Wire behaviour | Later (3b / hardware) |
 | --- | --- | --- | --- |
-| Held on/off | `MOVE_FORWARD`, `MOVE_BACKWARD` | `ACTION` frame, `value` = `10000` on hold / `0` on release (no per-tic magnitude — DOOM movement is on/off; a future run/walk split is a `GazeZoneMap` change only) | — |
+| Held analog | `MOVE_FORWARD`, `MOVE_BACKWARD` | **(R14)** `ACTION` frame each tic, `value` = proportional magnitude `[0, 10000]` from the gaze vector, `0` on release | — |
 | Held analog | `TURN_LEFT`, `TURN_RIGHT` | `TURN` frame each tic, `value` = clamped mouse-x delta derived from the gaze magnitude (§5, R5) | — |
 | Pulsed | `FIRE`, `USE` | `PULSE` frame; C side holds the key `PULSE_HOLD_TICS` built tics then releases (§10) | — |
 | Discrete | `PAUSE` | `DISCRETE` frame; C side edge-posts the pause key | `WEAPON_1..7`, `NEXT_WEAPON`, `PREV_WEAPON`, `AUTOMAP`, `SAVE_GAME`, `LOAD_GAME`, `EXIT_DOOM`, `MENU_CONFIRM`, `MENU_CANCEL`, `MENU_UP`, `MENU_DOWN` (all 3b, with the voice grammar) |
@@ -241,25 +250,32 @@ frames are unaffected.
 
 ### R11 — Input tunables are documented module constants, not `RuntimeConfig` fields
 
-Exhaustive list. §6 calls the regions "configurable"; a user-facing config
+Exhaustive list. §6 calls the shaping "configurable"; a user-facing config
 surface is deferred until the manual gate shows tuning is needed, at which point
 each constant becomes a `RuntimeConfig` field with the same name.
-`GazeZoneMap` / `GazeFilter` / `FireArbiter` already accept these as constructor
-arguments, so the seam exists.
+`GazeStick` / `GazeVectorFilter` / `FireArbiter` already accept these as
+constructor arguments, so the seam exists.
+
+R14 (2026-09-07) rewrote the `pewpew.input.gaze` rows: the rectangular
+`DEAD_ZONE_HALF_W` / `DEAD_ZONE_HALF_H`, `DWELL_S`, and `JITTER_GRACE_S` are
+gone; `TURN_RESPONSE_EXPONENT` became the axis-shared `RESPONSE_EXPONENT`;
+`DEAD_ZONE_RADIUS` and `OUTER_SATURATION` are new. `MAGNITUDE_EMA_ALPHA` now
+weights the whole output vector, not just turn.
 
 | Constant | Module | Default | Unit | Meaning |
 | --- | --- | --- | --- | --- |
-| `DEAD_ZONE_HALF_W` | `pewpew.input.gaze` | `180` | px from centre | half-width of the central no-action rectangle |
-| `DEAD_ZONE_HALF_H` | `pewpew.input.gaze` | `150` | px from centre | half-height of the same (360×300 total ≈ 25% of the 640×640 surface; larger than a first read of §6 "generous dead zone" might suggest is needed — flagged for the user's R-review against §6, but a narrow Prism gaze range argues for keeping turning reachable) |
-| `TURN_RESPONSE_EXPONENT` | `pewpew.input.gaze` | `1.5` | — | shaping exponent: gentle turn near the dead zone, steep at the edge |
-| `MAGNITUDE_STEPS` | `pewpew.input.actions` | `20` | — | quantisation of the smoothed turn magnitude before it is sent (the "quantum" is `1/MAGNITUDE_STEPS`) |
-| `MAGNITUDE_EMA_ALPHA` | `pewpew.input.gaze` | `0.4` | — | EMA weight for the raw turn magnitude while a turn is held |
-| `DWELL_S` | `pewpew.input.gaze` | `0.15` | s | continuous presence required before an action is emitted (§6 "~150 ms") |
-| `JITTER_GRACE_S` | `pewpew.input.gaze` | `0.02` | s | a held action survives this long of a `raw_set` dropout before release |
+| `DEAD_ZONE_RADIUS` | `pewpew.input.gaze` | `0.28` | fraction of normalized space | radius of the central no-action circle; `r` at or below this emits nothing (R14) |
+| `OUTER_SATURATION` | `pewpew.input.gaze` | `0.95` | fraction of normalized space | `r` at or above this maps to full deflection; the live band is `[DEAD_ZONE_RADIUS, OUTER_SATURATION]` (R14) |
+| `RESPONSE_EXPONENT` | `pewpew.input.gaze` | `1.5` | — | shaping exponent applied to the rescaled magnitude; one curve for both axes (R14; was `TURN_RESPONSE_EXPONENT`) |
+| `MAGNITUDE_EMA_ALPHA` | `pewpew.input.gaze` | `0.4` | — | EMA weight for the raw gaze output vector `(fx, fy)` each tick (R14) |
+| `EMA_ZERO_EPSILON` | `pewpew.input.gaze` | `1e-3` | vector magnitude | below this the smoothed vector is snapped to `(0, 0)` so a rested stick stops emitting (R14) |
+| `MAGNITUDE_STEPS` | `pewpew.input.actions` | `20` | — | quantisation of a smoothed magnitude before it is sent, for both axes (quantum `1/MAGNITUDE_STEPS`) |
+| `MOVE_MAGNITUDE_SCALE` | `pewpew.input.actions` | `10000` | wire units | magnitude `1.0` maps to this `ACTION.value` (R14) |
 | `TURN_MAX_MOUSE_DELTA` | `pewpew.input.actions` | `40` | mouse units | magnitude `1.0` maps to this signed per-tic x delta (gate-tunable) |
 | `FIRE_DEBOUNCE_S` | `pewpew.input.fire` | `0.12` | s | minimum interval between fused shots |
 | `PULSE_HOLD_TICS` | C `i_ipc_input.c` | `2` | game tics | how long a `PULSE` holds its key down before the paired keyup |
 | `IPC_TURN_CLAMP` | C `i_ipc_input.c` | `40` | mouse units | C-side clamp on an injected turn x value |
+| `MOVE_MAX_FORWARDMOVE` | C `i_ipc_input.c` | `50` | DOOM `forwardmove` units | `ACTION.value` `10000` maps to this signed `forwardmove` contribution (R14; `50` is DOOM's run value) |
 
 Protocol constants (`IPC_PROTOCOL_VERSION`, `IPC_FRAME_SIZE`,
 `IPC_HANDSHAKE_TIMEOUT_S`, `IPC_HELLO_TIMEOUT_S`) are protocol-governed, not R11
@@ -285,6 +301,118 @@ milestone — the base design is not rewritten here). The README already uses
 **Cost if wrong.** If `piu piu` is later preferred, the 3b detector is
 recalibrated against `piu piu` user samples and one grammar string changes; no
 3a code is affected.
+
+### R14 — Gaze is a radial analog stick, not discrete zones (amendment, 2026-09-07)
+
+Supersedes: the forward-axis half of R5 and the movement half of R6; rewrites
+§7; edits §4 (units + data flow steps 4–6), §5 (`ACTION.value` semantics), §10
+(the C `MOVE_*` translation), §11/§17 (gate geometry), and the R11 tunable list.
+The IPC boundary, the wire framing (R10), the transport (R2), the server (R3,
+§6), fire fusion (R7, §8), the input-source protocol (R8, §9), `release_all`
+(R9), and the `TURN` path (the analog half of R5) are unchanged.
+
+**Why.** The 3a gate showed the discrete-zone model does not "feel as natural as
+looking around" (the user's acceptance bar). Three findings, one root cause
+each, all dissolved by going radial:
+
+1. *Backward unreachable.* `SimulatorInputSource` clamps gaze to the viewport
+   (640×480) but `InputPipeline` built `GazeZoneMap` in the 640×640 default
+   surface, so the backward band (`dy > 150` from centre `y = 320`) sat below
+   the reachable `y ≤ 479` — a ~9 px strip. R14 builds the stick from the
+   **actual viewport size**, and a radial model on that surface is symmetric.
+2. *Forward "cut" when glancing sideways.* `GazeFilter` released a held action
+   the instant the raw set changed region, then charged the re-entering action
+   a fresh `DWELL_S`. Continuous aiming stuttered. R14 has **no regions to
+   transition between** — the dwell/grace/region-change machinery is deleted.
+3. *Forward too fast / unbalanced against the ramped turn.* Forward was digital
+   (`value = 10000` on/off) while turn ramped `0–40`. R14 drives **both axes
+   from one curved vector**, so forward is as proportional as turn.
+
+**The model** (`pewpew.input.gaze`, pure, time via `now`):
+
+- **Normalized space.** Centre `(cx, cy) = (w // 2, h // 2)` of the surface the
+  stick is constructed with — and `InputPipeline` now constructs it with the
+  host viewport's real `(width, height)`, not a 640×640 default. Raw offset
+  `(dx, dy) = (gx − cx, gy − cy)`; per-axis normalize by the half-extent
+  `nx = dx / (w / 2)`, `ny = dy / (h / 2)`; magnitude `r = min(1.0,
+  hypot(nx, ny))`. Fixed centre; gaze recentering is a hardware-phase concern
+  (R8).
+- **Radial dead zone.** `r ≤ DEAD_ZONE_RADIUS` (default `0.28`, fraction of
+  normalized space) → zero vector. One magnitude test, not two per-axis tests —
+  no axis fires while the other is "dead". Circular in normalized space; an
+  ellipse in pixels matching the viewport aspect.
+- **Live-band rescale + outer saturation.** `t = clamp01((r −
+  DEAD_ZONE_RADIUS) / (OUTER_SATURATION − DEAD_ZONE_RADIUS))`, with
+  `OUTER_SATURATION` default `0.95` (gaze cannot hold the corner). `t` runs 0 at
+  the dead-zone edge to 1 at the saturation ring.
+- **Response curve.** `s = t ** RESPONSE_EXPONENT` (default `1.5`) — one curve,
+  both axes. This is the former `TURN_RESPONSE_EXPONENT`, renamed and shared.
+- **Reconstruct.** Unit direction `(ux, uy) = (nx / r, ny / r)`; the stick
+  vector is `(fx, fy) = (ux * s, uy * s)`, each in `[−1, 1]`. `GazeStick.resolve`
+  returns this `(fx, fy)` and nothing else — no `HeldAction`s, no state.
+- **Smoothing + map** (in `GazeVectorFilter`, §7). EMA the vector `(fx, fy)`
+  (`MAGNITUDE_EMA_ALPHA`, default `0.4`) — one filter for the whole stick,
+  replacing the per-`TURN`-action EMA — then map the smoothed `(ex, ey)` to
+  `HeldAction`s: `ey < 0 → MOVE_FORWARD |ey|`, `ey > 0 → MOVE_BACKWARD ey`,
+  `ex < 0 → TURN_LEFT |ex|`, `ex > 0 → TURN_RIGHT ex`; a diagonal yields both,
+  with no corner special-case. `update` returns `frozenset[HeldAction]` with ≤
+  one `MOVE_*` and ≤ one `TURN_*`. Backward speed is symmetric with forward.
+  No dwell, no grace, no region-change rule.
+
+**Units.** `GazeStick.resolve(x, y) -> tuple[float, float]` (pure geometry)
+replaces `GazeZoneMap`. `GazeVectorFilter.update(vec, now) ->
+frozenset[HeldAction]` (EMA the vector, then map — it hands `ActionRouter` raw
+smoothed float magnitudes) replaces `GazeFilter`. Quantisation stays the single
+responsibility of `ActionRouter` (`MAGNITUDE_STEPS`), unchanged from pre-R14.
+Same two-unit split, same interface into `InputPipeline`.
+`InputPipeline(source, send, *, surface=None, spoken_fire=None)` — `surface`
+`None` means "read it from the source's widget" for the simulator; a test may
+pass an explicit `(w, h)`.
+
+**Wire (§5).** `code` table unchanged (direction stays in `code`).
+`ACTION.value` changes from `10000`/`0` on-off to a proportional magnitude in
+`[0, 10000]` (`0` = released), quantised — exactly parallel to `TURN.value`'s
+`[0, 40]`. `Message.action(code, value)` keeps its signature; only the value
+range widens. `decode(encode(m)) == m` is unaffected. `MOVE_MAGNITUDE_SCALE =
+10000` becomes a named constant in `pewpew.input.actions` beside
+`TURN_MAX_MOUSE_DELTA`.
+
+**Router (`pewpew.input.actions`).** `ActionRouter.set_held` emits a frame for
+**both** `MOVE_*` and `TURN_*` on every call while held (each carrying
+`round(magnitude * scale)` quantised to `MAGNITUDE_STEPS`), and exactly one `0`
+frame on release. The "emit `MOVE` only on the on/off transition" rule is
+removed; there is one emit rule and one quantisation point for both axes.
+
+**C translator (patch 2).** The spec pins the **contract**, not the mechanism:
+a `MOVE_*` frame sets a signed `ipc_forwardmove` (scaled `10000 →
+MOVE_MAX_FORWARDMOVE`, the DOOM run value `50`; sign from `code`), re-applied
+every built tic, and zeroed on release / EOF / `BYE` / `IPC_Input_Shutdown`
+(R9's "no held input survives a lifecycle transition" still holds). The Task-3
+implementer chooses the mechanism against the real `crispy-doom-7.1` source, in
+this order, recording the choice and the rejected options in the patch header:
+
+1. **A bounded additive term in `G_BuildTiccmd`** — `cmd->forwardmove +=
+   ipc_clamp(ipc_forwardmove)` immediately before DOOM's existing
+   `forwardmove` clamp. Deterministic; touches no config global; independent of
+   Crispy's analog-joystick mode. Cost: patch 2 gains one hunk in a vanilla
+   function (`g_game.c`), narrowing §10's "patch 2 edits no vanilla line"
+   property to "patch 2 edits one clearly-marked vanilla line".
+2. **Synthetic `ev_joystick`** — fold through DOOM's joystick path. More native,
+   but the classic path is digital unless Crispy's analog controller mode is
+   active, so proportionality is not guaranteed.
+3. **Fallback — keyboard duty-cycle** — hold `key_up` / `key_down` for N of
+   every M built tics ∝ magnitude. The normalized `MOVE_* + magnitude 0–1`
+   action is identical in all three; this choice never leaves the C translator.
+
+**Cost if wrong.** If the radial stick still does not feel natural at the gate,
+the constants (`DEAD_ZONE_RADIUS`, `OUTER_SATURATION`, `RESPONSE_EXPONENT`,
+`MAGNITUDE_EMA_ALPHA`) are the whole tuning surface and are gate-adjustable
+module constants (R11). If the C forward path (all three options) cannot make
+`forwardmove` proportional, the gate records **FAIL — IPC input path
+insufficient** exactly as §17 already provides, and forward falls back to the
+digital R6 behaviour while turn stays analog — a one-file C change and a
+one-line R6 revert. The zone model is not resurrected; "continuous direction,
+digital forward" is the documented degraded mode.
 
 ---
 
@@ -332,9 +460,9 @@ inputs with no stuck key and no orphan process?**
 - The normalized action model and `ActionRouter` (held set, pulse, discrete,
   `release_all`), the sole owner of magnitude quantisation, draining to an
   injected sink that maps to IPC `Message` objects.
-- `GazeZoneMap` + `GazeFilter`: the §6 region layout, ~150 ms entry dwell,
-  progressive turn magnitude, jitter grace, immediate release on a region
-  change.
+- `GazeStick` + `GazeVectorFilter` (R14): the radial analog stick — round dead
+  zone, live-band rescale, one shared response curve, vector reconstruction —
+  and the output-vector EMA that maps to ≤ one `MOVE_*` + ≤ one `TURN_*`.
 - `FireArbiter` + the two source protocols (R7), with the real deliberate-action
   (simulator click) source and `NullSpokenFireSource` in 3a.
 - `InputSource` protocol + `SimulatorInputSource` (Qt events on the host,
@@ -409,11 +537,11 @@ PewPew Engine process                              Crispy Doom process (patch se
     |             pause_edge, debug_fire_edge)          +- IPC_Input_Init()          (patch 2) -- connects
     v                                                        DOOMED_PRISM_IPC_ADDR
   InputPipeline.tick(now)                             d_loop.c BuildNewTic()  (once per built tic)
-    +- GazeZoneMap.resolve(x, y) -> {HeldAction}         +- IPC_Input_Pump()         (patch 2) -- decode
-    +- GazeFilter (dwell, grace) -> stable set                frames, D_PostEvent(ev_keydown/up, ev_mouse)
+    +- GazeStick.resolve(x, y) -> (fx, fy)               +- IPC_Input_Pump()         (patch 2) -- decode
+    +- GazeVectorFilter (EMA) -> {HeldAction}                 frames; ev_mouse dx + ipc_forwardmove
     +- FireArbiter (click edge + spoken edge)          I_FinishUpdate
-    +- ActionRouter (held set, quantise, diff)           +- FB_Export_Publish()      (patch 1, unchanged)
-    v                                                   IPC EOF -> post keyup for held MOVE_*, stop
+    +- ActionRouter (per-tick MOVE+TURN, quantise)       +- FB_Export_Publish()      (patch 1, unchanged)
+    v                                                   IPC EOF -> zero forwardmove + keyup fire/use, stop
   IpcServer.send(Message)  --8-byte frames-->  socket  --> IPC_Input reader
   IpcServer.on_disconnect  <-- socket EOF
 ```
@@ -424,12 +552,12 @@ PewPew Engine process                              Crispy Doom process (patch se
 | --- | --- | --- | --- |
 | `pewpew.ipc.protocol` | Python | `Message` (frozen; `type`, `code: int`, `value: int`), `MessageType` enum, `encode(msg) -> bytes` (8 bytes), `decode(buf) -> (Message | None, bytes)`; `IpcProtocolError`; constants `IPC_PROTOCOL_VERSION = 1`, `IPC_FRAME_SIZE = 8`. Pure. Never imports `pewpew.input`. | `struct` (stdlib) |
 | `pewpew.ipc.server` | Python | `IpcServer(*, address_factory=default)`: `start() -> str`, `poll() -> None`, `send(Message) -> None`, `is_connected: bool`, `on_disconnect: Callable`, `close()`. Blocking socket, short send timeout, single client. Sole owner of the socket path (bind + unlink). | `socket` (stdlib), `pewpew.ipc.protocol` |
-| `pewpew.input.actions` | Python | `Action` enum (the sole `Action ↔ int` mapping, matching the §5 table), `HeldAction(action, magnitude)`, `ActionRouter(sink)`: `set_held(frozenset[HeldAction])`, `pulse(Action)`, `discrete(Action)`, `release_all()`. An `ACTION` (`MOVE_*`) frame is emitted only on the on/off transition; a `TURN` frame is emitted on every `set_held` call while the turn is held (it is a one-shot mouse delta), with one `0` on release. Scales turn magnitude with `TURN_MAX_MOUSE_DELTA`. Constants `MAGNITUDE_STEPS`, `TURN_MAX_MOUSE_DELTA`. Pure + sink. | `pewpew.ipc.protocol` |
-| `pewpew.input.gaze` | Python | `GazeZoneMap(surface_w, surface_h, *, dead_zone=(180,150), turn_exponent=1.5)`: `resolve(x, y) -> frozenset[HeldAction]` (region → actions; raw float magnitude). `GazeFilter(*, dwell_s=0.15, grace_s=0.02, ema_alpha=0.4)`: `update(raw_set, now) -> frozenset[HeldAction]`. Pure; time via the `now` argument only. | `pewpew.input.actions` |
+| `pewpew.input.actions` | Python | `Action` enum (the sole `Action ↔ int` mapping, matching the §5 table), `HeldAction(action, magnitude)`, `ActionRouter(sink)`: `set_held(frozenset[HeldAction])`, `pulse(Action)`, `discrete(Action)`, `release_all()`. **(R14)** every `set_held` call while held emits a frame for both `MOVE_*` (`ACTION`) and `TURN_*` (`TURN`), each carrying `round(magnitude * scale)` quantised to `MAGNITUDE_STEPS`, with one `0` frame on release. `MOVE_*` scale `MOVE_MAGNITUDE_SCALE` (`10000`), `TURN_*` scale `TURN_MAX_MOUSE_DELTA` (`40`). Constants `MAGNITUDE_STEPS`, `MOVE_MAGNITUDE_SCALE`, `TURN_MAX_MOUSE_DELTA`. Pure + sink. | `pewpew.ipc.protocol` |
+| `pewpew.input.gaze` | Python | **(R14)** `GazeStick(surface_w, surface_h, *, dead_zone_radius=0.28, outer_saturation=0.95, response_exponent=1.5)`: `resolve(x, y) -> tuple[float, float]` — the curved, saturated stick vector `(fx, fy)` each in `[−1, 1]`; stateless. `GazeVectorFilter(*, ema_alpha=0.4)`: `update(vec, now) -> frozenset[HeldAction]` — EMA the vector, then map to ≤ one `MOVE_*` + ≤ one `TURN_*` as raw-float magnitudes (quantisation is `ActionRouter`'s). No dwell, grace, or region rule. Pure; time via `now` only. | `pewpew.input.actions` |
 | `pewpew.input.fire` | Python | `FireArbiter(*, debounce_s=0.12)`: `deliberate_action()`, `spoken_fire()`, `poll(now) -> bool`, `reset()`. `DeliberateActionSource` / `SpokenFireSource` protocols; `NullSpokenFireSource`. Pure; time via `poll(now)` only. | — |
 | `pewpew.input.source` | Python | `InputSource` protocol: `sample(now) -> InputSample`. `InputSample(gaze_xy: tuple[int,int] | None, activation_edge: bool, pause_edge: bool, debug_fire_edge: bool)`. `PrismInputSource` stub. | — |
 | `pewpew.input.simulator_source` | Python | `SimulatorInputSource(widget)`: a Qt event filter tracks mouse position, left-press edges, `Return`/`Enter` edges, and (env-gated) `F9` edges; `sample(now)` returns and clears the accumulated `InputSample`. `Leave` sets `gaze_xy = None`. | PySide6, `pewpew.input.source` |
-| `pewpew.input.pipeline` | Python | `InputPipeline(source, server, *, spoken_fire=NullSpokenFireSource())`: builds `GazeZoneMap`, `GazeFilter`, `FireArbiter`, `ActionRouter(sink=server.send)`. `tick(now)`, `release_all()`, `toggle_pause()`, `paused: bool`. The single integration unit. Time via `tick(now)`. | all of the above |
+| `pewpew.input.pipeline` | Python | `InputPipeline(source, send, *, surface=None, spoken_fire=NullSpokenFireSource())`: builds `GazeStick`, `GazeVectorFilter`, `FireArbiter`, `ActionRouter(sink=guarded send)`. `surface=None` reads `(width, height)` from the source's widget (the simulator viewport); a test may pass an explicit `(w, h)`. `tick(now)`, `release_all()`, `toggle_pause()`, `paused: bool`. The single integration unit. Time via `tick(now)`. | all of the above |
 | `pewpew.engine` (modified) | Python | `start(*, ipc_address: str | None = None)` injects `DOOMED_PRISM_IPC_ADDR`; when `DOOMED_PRISM_WARP` is set, appends `-warp <value> -skill <DOOMED_PRISM_SKILL or 3>` to argv; `ipc_address` property. `stop()` does **not** touch the socket path (the server owns it). Mirrors the existing `frame_segment_name` env handling. | existing |
 | `pewpew.host_widget` (modified) | Python | `showEvent`: `IpcServer.start()`, `engine.start(ipc_address=…)`, build `InputPipeline`. `_on_tick`: **first** `server.poll()` + disconnect handling (before any early return), then, once past the M2 frame-wait, `pipeline.tick(now)`. `hideEvent` / child-disconnect / handshake-timeout wired per §12. `cleanup()` extended per R9. A `_PauseOverlay` child driven by `pipeline.paused`. | `pewpew.input.pipeline`, `pewpew.ipc.server` |
 | `src/i_ipc_input.c` / `.h` (patch 2) | C | `IPC_Input_Init()` (connect, blocking then non-blocking; no-op if `DOOMED_PRISM_IPC_ADDR` unset), `IPC_Input_Pump()` (decode frames → `D_PostEvent`; per-key `PULSE_HOLD_TICS` release scheduler; EOF → release held → stop), `IPC_Input_Shutdown()`. GPL-2.0-or-later header matching Crispy's style. | BSD sockets / winsock; `d_event.h` |
@@ -449,17 +577,19 @@ commit.
 2. If still in the M2 "waiting for framebuffer / first frame" window, return
    here (the input path needs the game running).
 3. `sample = source.sample(now)`.
-4. `raw = gaze_map.resolve(*sample.gaze_xy)` when `gaze_xy` is not `None`, else
-   the empty set.
-5. `held = gaze_filter.update(raw, now)` — dwell-gated, grace-smoothed;
-   `GazeZoneMap` gave raw floats, `GazeFilter` EMA-smooths the turn magnitude.
-6. `router.set_held(held)` — for a held `MOVE_*` (`ACTION`) it emits a frame
-   only on the on/off transition (`10000` on hold, `0` on release, nothing in
-   between). For a held `TURN_*` it emits a `TURN` frame on **every** call while
-   the turn is held (matching the R6 action table: "`TURN` frame each tic"),
-   because `TURN` is a one-shot `ev_mouse` delta the C side zeroes each tic; a
-   single `0` frame is emitted once on release. Turn wire scaling is
-   `round(magnitude * TURN_MAX_MOUSE_DELTA)` clamped to `[0, TURN_MAX_MOUSE_DELTA]`.
+4. **(R14)** `vec = stick.resolve(*sample.gaze_xy)` when `gaze_xy` is not
+   `None`, else `(0.0, 0.0)` — the curved, saturated stick vector.
+5. **(R14)** `held = vector_filter.update(vec, now)` — EMA the vector, quantise
+   to `MAGNITUDE_STEPS`, map to ≤ one `MOVE_*` and ≤ one `TURN_*` `HeldAction`.
+   No dwell / grace / region rule (there are no regions).
+6. **(R14)** `router.set_held(held)` — while an axis is held it emits a frame on
+   **every** call: `MOVE_*` an `ACTION` frame with `value = round(magnitude *
+   MOVE_MAGNITUDE_SCALE)` quantised, `TURN_*` a `TURN` frame with `value =
+   round(magnitude * TURN_MAX_MOUSE_DELTA)` clamped to
+   `[0, TURN_MAX_MOUSE_DELTA]`. Each axis emits exactly one `0` frame on
+   release. Both the C `forwardmove` term and the C `ev_mouse` delta are
+   re-derived from the frame each built tic, so a sustained stick needs a fresh
+   frame per tick on both axes.
 7. `if sample.activation_edge: fire.deliberate_action()`;
    `if spoken_fire.spoken_fire_edge() or sample.debug_fire_edge:
    fire.spoken_fire()`; `if fire.poll(now): router.pulse(FIRE)`.
@@ -483,7 +613,7 @@ commit.
 | 0 | `version` | u8 | `IPC_PROTOCOL_VERSION` (`1`). Receiver rejects a mismatch. |
 | 1 | `type` | u8 | `MessageType` |
 | 2 | `code` | u16 | action id (table below) or, for `HELLO`, the sender's protocol version |
-| 4 | `value` | i32 | `ACTION`: `10000` on hold, `0` on release. `TURN`: unsigned clamped mouse-x magnitude (direction is in `code`). `PULSE`/`DISCRETE`/`HELLO`/`BYE`: `0`. |
+| 4 | `value` | i32 | `ACTION` (R14): proportional magnitude `[0, MOVE_MAGNITUDE_SCALE]` (`10000`), `0` on release; direction is in `code`. `TURN`: unsigned clamped mouse-x magnitude `[0, TURN_MAX_MOUSE_DELTA]` (`40`), direction in `code`. `PULSE`/`DISCRETE`/`HELLO`/`BYE`: `0`. |
 
 ### `MessageType`
 
@@ -516,15 +646,16 @@ commit.
 
 `Message` always holds the **wire** `int` `value`, and every constructor takes
 already-wire-form `int`s — `pewpew.ipc.protocol` does no unit scaling and never
-imports `pewpew.input`. `Message.action(code, value)` (caller passes `10000` or
-`0`), `Message.turn(code, value)` (caller passes the clamped mouse-x magnitude),
-`Message.pulse(code)` / `Message.discrete(code)` / `Message.hello()` /
-`Message.bye()` (`value = 0`). All take a plain `int` `code`. All the
-magnitude→wire scaling (`round(magnitude * 10000)` for `MOVE_*`,
-`round(magnitude * TURN_MAX_MOUSE_DELTA)` clamped to `[0, TURN_MAX_MOUSE_DELTA]`
-for `TURN_*`) lives in `ActionRouter` (`pewpew.input.actions`, which owns
-`TURN_MAX_MOUSE_DELTA`). The round-trip contract is `decode(encode(m)) == m`;
-`ActionRouter`'s scaling is tested separately.
+imports `pewpew.input`. `Message.action(code, value)` (caller passes the scaled
+magnitude `0..10000`), `Message.turn(code, value)` (caller passes the clamped
+mouse-x magnitude), `Message.pulse(code)` / `Message.discrete(code)` /
+`Message.hello()` / `Message.bye()` (`value = 0`). All take a plain `int`
+`code`. All the magnitude→wire scaling — `round(magnitude * MOVE_MAGNITUDE_SCALE)`
+quantised for `MOVE_*`, `round(magnitude * TURN_MAX_MOUSE_DELTA)` clamped to
+`[0, TURN_MAX_MOUSE_DELTA]` for `TURN_*` (R14) — lives in `ActionRouter`
+(`pewpew.input.actions`, which owns both scale constants). The round-trip
+contract is `decode(encode(m)) == m`; `ActionRouter`'s scaling is tested
+separately.
 
 The C side mirrors `decode`: read into an 8-byte staging buffer, act, repeat.
 
@@ -562,50 +693,67 @@ The C side mirrors `decode`: read into an 8-byte staging buffer, act, repeat.
   sockets, `unlink` the POSIX path. Idempotent. Never depends on the child — the
   M2 teardown lesson.
 
-## 7. Gaze zones and the filter
+## 7. The gaze stick and the vector filter (R14)
 
-`pewpew.input.gaze`, pure Python, time supplied by the `now` argument.
+`pewpew.input.gaze`, pure Python, time supplied by the `now` argument. R14
+(2026-09-07) replaced the rectangular `GazeZoneMap` / dwell-gated `GazeFilter`
+with a radial analog stick: movement and turning are two axes of one curved
+vector, so moving feels like looking around. R14's "Why" records the three
+gate findings this dissolves.
 
-### `GazeZoneMap`
+### `GazeStick`
 
-Surface 640×640 (§5). All regions measured from the centre `(320, 320)`, sized
-by `dead_zone=(DEAD_ZONE_HALF_W=180, DEAD_ZONE_HALF_H=150)`:
+`GazeStick(surface_w, surface_h, *, dead_zone_radius=DEAD_ZONE_RADIUS (0.28),
+outer_saturation=OUTER_SATURATION (0.95),
+response_exponent=RESPONSE_EXPONENT (1.5))`.
 
-- **Dead zone.** The centred `360×300` rectangle. Gaze inside → empty set.
-- **Left / right turn bands.** `|dx| > DEAD_ZONE_HALF_W` **and** `|dy| ≤
-  DEAD_ZONE_HALF_H`. `resolve` returns `HeldAction(TURN_LEFT or TURN_RIGHT,
-  magnitude)` with `magnitude = ((|dx| - DEAD_ZONE_HALF_W) / (320 -
-  DEAD_ZONE_HALF_W)) ** TURN_RESPONSE_EXPONENT`, a **raw float** in `[0, 1]`.
-- **Upper / lower forward-reverse bands.** `|dy| > DEAD_ZONE_HALF_H` **and**
-  `|dx| ≤ DEAD_ZONE_HALF_W`. `MOVE_FORWARD` (gaze above centre) or
-  `MOVE_BACKWARD` (below), magnitude fixed at `1.0` (movement is on/off, R6).
-- **Corners.** `|dx| > DEAD_ZONE_HALF_W` **and** `|dy| > DEAD_ZONE_HALF_H`.
-  `MOVE_FORWARD` or `MOVE_BACKWARD` (fixed `1.0`) **and** the matching `TURN_*`
-  with its own raw-float magnitude (§6 "forward movement combined with
-  turning"). The three region families are mutually exclusive by the `dx`/`dy`
-  qualifiers above.
+`InputPipeline` constructs it with the **host viewport's real `(width,
+height)`** (640×480 for the current simulator), not a 640×640 default — the
+former mismatch is finding 1's root cause. Centre is `(surface_w // 2,
+surface_h // 2)`, fixed; gaze recentering is a hardware-phase concern (R8).
 
-### `GazeFilter`
+`resolve(x, y) -> (fx, fy)`:
 
-`update(raw_set, now) -> frozenset[HeldAction]`, one release rule:
+1. `dx, dy = x - cx, y - cy`.
+2. Per-axis normalize: `nx = dx / (surface_w / 2)`, `ny = dy / (surface_h / 2)`.
+3. `r = min(1.0, hypot(nx, ny))`. If `r <= dead_zone_radius` → `(0.0, 0.0)`
+   (the round dead zone — one magnitude test, so no axis fires while the other
+   is dead).
+4. `t = clamp01((r - dead_zone_radius) / (outer_saturation - dead_zone_radius))`
+   — 0 at the dead-zone edge, 1 at/after the saturation ring.
+5. `s = t ** response_exponent` — one curve for both axes.
+6. `ux, uy = nx / r, ny / r`; return `(ux * s, uy * s)`, each in `[-1, 1]`.
 
-- **Entry dwell.** An action's *action id* must be present in `raw_set`
-  continuously for `dwell_s` (default `0.15`, §6) before it is emitted. The
-  dwell timer is per action id.
-- **Release.** An emitted action is released once it has been absent from
-  `raw_set` for `grace_s` (default `0.02` — one 60 Hz tick). A `raw_set` that
-  still has some regions but not this action (a genuine region change) releases
-  the outgoing action on the same tick, without waiting out `grace_s`. Net
-  behaviour on a real region exit is ≤ 1 tick; the grace only rides out a
-  single-sample gaze dropout.
-- **Magnitude smoothing.** While a `TURN_*` action is held, the emitted
-  magnitude is an EMA (`ema_alpha`, default `0.4`) of the raw magnitude, seeded
-  with the first raw magnitude on (re-)acquisition after release. `MOVE_*`
-  magnitudes are not smoothed (they are constant `1.0`).
+The vector's *direction* is exactly where gaze points; its *magnitude* is the
+curved, saturated deflection. `resolve` holds no state.
 
-Quantisation of the smoothed magnitude and the "emit only on change" decision
-belong to `ActionRouter` (§4 step 6), not here — there is exactly one
-quantisation point.
+### `GazeVectorFilter`
+
+`GazeVectorFilter(*, ema_alpha=MAGNITUDE_EMA_ALPHA (0.4))`.
+`update(vec, now) -> frozenset[HeldAction]`:
+
+1. EMA each component: `e = alpha * vec + (1 - alpha) * e_prev`. `e_prev` starts
+   at `(0.0, 0.0)`, so the first non-zero `vec` after a rest already rises from
+   zero — no separate seed step. A `(0.0, 0.0)` input (gaze in the dead zone, or
+   `gaze_xy is None`) drives `e` back toward zero; `e` is snapped to exactly
+   `(0.0, 0.0)` once `hypot(e) < EMA_ZERO_EPSILON` (default `1e-3`) so a rested
+   stick emits nothing rather than an eternally-tiny value.
+2. Map the smoothed `(ex, ey)` — still raw floats — to `HeldAction`s:
+   `ey < 0 -> HeldAction(MOVE_FORWARD, |ey|)`, `ey > 0 ->
+   HeldAction(MOVE_BACKWARD, ey)`; `ex < 0 -> HeldAction(TURN_LEFT, |ex|)`,
+   `ex > 0 -> HeldAction(TURN_RIGHT, ex)`. A component of exactly `0.0`
+   contributes nothing. Result has ≤ one `MOVE_*` and ≤ one `TURN_*`.
+
+No dwell, no grace, no region-change rule — the dead zone plus the EMA are the
+whole jitter defence. The `now` argument is retained in the signature for
+symmetry with the rest of the pipeline and a possible future rate limit; the
+default filter does not read it.
+
+Quantisation stays in `ActionRouter` (§4 step 6, `MAGNITUDE_STEPS` in
+`pewpew.input.actions`) — one quantisation point, unchanged from the pre-R14
+design; `GazeVectorFilter` hands it raw smoothed floats. A held axis whose
+`round(magnitude * scale)` is `0` emits nothing until it crosses the first
+quantum, and emits a single `0` frame when it falls back below it.
 
 ## 8. Fire fusion
 
@@ -678,9 +826,17 @@ style; upstream notices in edited files preserved):
   half-disable while leaving the socket open.
 - `void IPC_Input_Pump(void)` — if disabled, return. Non-blocking `recv` into an
   8-byte staging buffer; for each complete frame, translate and `D_PostEvent`:
-  - `ACTION` `MOVE_FORWARD` / `MOVE_BACKWARD`: `value != 0` → `ev_keydown` of
-    `key_up` / `key_down` (Crispy's configured bindings) and set a `held[]` bit;
-    `value == 0` → `ev_keyup` and clear the bit.
+  - `ACTION` `MOVE_FORWARD` / `MOVE_BACKWARD` **(R14, analog)**: scale `value`
+    (`0..MOVE_MAGNITUDE_SCALE`) to `0..MOVE_MAX_FORWARDMOVE` (`50`), apply the
+    sign from `code` (`MOVE_FORWARD` positive, `MOVE_BACKWARD` negative), and
+    store it as the single signed `ipc_forwardmove`. The pump does **not**
+    `D_PostEvent` a key here; `ipc_forwardmove` is folded into `cmd->forwardmove`
+    every built tic by the mechanism the Task-3 implementer selects per R14
+    (primary: a bounded additive term in `G_BuildTiccmd`; then `ev_joystick`;
+    fallback: a `key_up` / `key_down` duty-cycle). `value == 0` sets
+    `ipc_forwardmove = 0`. There is no `held[]` bit for movement under R14 —
+    the release-all path (below) just zeroes `ipc_forwardmove` (and, in the
+    duty-cycle fallback, posts the paired `ev_keyup`).
   - `TURN` `TURN_LEFT` / `TURN_RIGHT`: `int d = value; if (d > IPC_TURN_CLAMP) d
     = IPC_TURN_CLAMP; if (d < 0) d = 0;` then post an `ev_mouse` event with
     `data2 = (code == TURN_LEFT ? -d : d)` and `data3 = 0` — direction from
@@ -702,9 +858,10 @@ style; upstream notices in edited files preserved):
   - `BYE` → run the release-all below, keep the socket readable for EOF, set
     `ipc_enabled = 0`.
   - `recv` returns `0` (EOF) or errors non-`EWOULDBLOCK`/`EAGAIN` →
-    **release-all**: for every set `held[]` bit post the matching `ev_keyup`;
-    post a defensive `ev_keyup` for `key_fire` / `key_use`; `ipc_enabled = 0`;
-    close the socket. DOOM continues on SDL input.
+    **release-all**: `ipc_forwardmove = 0` (and in the duty-cycle fallback post
+    `ev_keyup` for any movement key still held); post a defensive `ev_keyup` for
+    `key_fire` / `key_use`; `ipc_enabled = 0`; close the socket. DOOM continues
+    on SDL input.
 - `void IPC_Input_Shutdown(void)` — release-all, close the socket, `WSACleanup`
   on Windows. Idempotent (guarded by `ipc_enabled` plus a `socket >= 0` check).
   Does not `unlink` — the server owns the path.
@@ -725,14 +882,22 @@ style; upstream notices in edited files preserved):
   0, 1, or several tics per call.)
 - `IPC_Input_Shutdown();` immediately before `FB_Export_Shutdown();` in
   `I_ShutdownGraphics` (the normal-exit path).
+- `cmd->forwardmove` fold **(R14)** — if the Task-3 implementer selects R14's
+  primary mechanism, one further hunk: `cmd->forwardmove += ipc_clamp(
+  ipc_forwardmove);` immediately before DOOM's existing `forwardmove` clamp in
+  `G_BuildTiccmd` (`src/g_game.c`), guarded by `ipc_enabled`. This is the one
+  patch-2 edit to a vanilla (non-patch-1, non-new) line; it is a single clearly
+  commented addition and posts no event. If mechanism 2 or the fallback is
+  chosen instead, this hunk is absent and movement re-uses the `ev_joystick` or
+  key-event path.
 - **No signal handling in patch 2.** On a SIGINT/SIGTERM stop the process dies
   before `I_ShutdownGraphics` runs, but the kernel closes the client socket fd
   as the process exits, so the server (PewPew) sees EOF, runs its own
   `on_disconnect`, and unlinks the socket path it owns (§6, R3). Patch 1's
-  `fb_signal_handler` still unlinks the shared-memory segment. Patch 2 therefore
-  touches no patch-1 line — every patch-2 hunk is an addition in a region patch
-  1 introduced (`I_InitGraphics` / `I_ShutdownGraphics` bodies), a region patch
-  1 does not touch (`d_loop.c`), or a new file.
+  `fb_signal_handler` still unlinks the shared-memory segment. Apart from the
+  optional R14 `G_BuildTiccmd` fold above, every patch-2 hunk is an addition in
+  a region patch 1 introduced (`I_InitGraphics` / `I_ShutdownGraphics` bodies),
+  a region patch 1 does not touch (`d_loop.c`), or a new file.
 
 **`src/CMakeLists.txt`:** add `i_ipc_input.c i_ipc_input.h` to the source list
 (a different line from patch 1's `i_framebuffer_export.*` insertion); `if(WIN32)
@@ -915,25 +1080,28 @@ a pre-connected `socketpair` injector.
   mismatch; a client close makes the next `poll()` fire `on_disconnect` exactly
   once; a `settimeout` send timeout is surfaced as a disconnect; `close()`
   unlinks the POSIX path and is idempotent.
-- **`pewpew.input.actions`.** `set_held` emits an `ACTION` (`MOVE_*`) frame only
-  on the on/off transition, and a `TURN` frame on every call while the turn is
-  held (`TURN` is a one-shot mouse delta the C side zeroes each tic), with one
-  `0` frame on release; the turn wire scaling (`round(magnitude *
-  TURN_MAX_MOUSE_DELTA)`, clamped to `[0, TURN_MAX_MOUSE_DELTA]`) is asserted
-  for representative magnitudes including `1.0` and an over-range guard;
-  `MOVE_*` emit `value = 10000` on hold, `0` on release, no analog stream;
-  `pulse` / `discrete` emit one frame;
-  `release_all` emits a `0`-value frame for every held action and nothing for
+- **`pewpew.input.actions` (R14).** `set_held` emits a frame for **both**
+  `MOVE_*` (`ACTION`) and `TURN_*` (`TURN`) on every call while that axis is
+  held, and exactly one `0` frame per axis on release; wire scaling
+  (`round(magnitude * MOVE_MAGNITUDE_SCALE)` quantised to `MAGNITUDE_STEPS` for
+  `MOVE_*`; `round(magnitude * TURN_MAX_MOUSE_DELTA)` clamped to
+  `[0, TURN_MAX_MOUSE_DELTA]` for `TURN_*`) is asserted for representative
+  magnitudes including `1.0`, a sub-quantum value (emits nothing, then a `0` on
+  release), and an over-range guard; `pulse` / `discrete` emit one frame;
+  `release_all` emits a `0`-value frame for every held axis and nothing for
   already-released ones; the sink receives `Message` objects whose `code`
   matches the §5 table.
-- **`pewpew.input.gaze`.** `GazeZoneMap.resolve` for the dead-zone centre
-  (empty), each band (correct action; magnitude monotonically increasing as the
-  point moves outward), each corner (two actions), and the mutual exclusivity of
-  the three families at an outside-both point. `GazeFilter` with an explicit
-  `now`: an action needs `dwell_s` of continuous presence before it appears; a
-  `grace_s` dropout is ridden out, a longer absence releases; a region *change*
-  releases the outgoing action on the same tick; the turn-magnitude EMA ramps
-  and re-seeds on re-acquisition.
+- **`pewpew.input.gaze` (R14).** `GazeStick.resolve`: the dead-zone circle
+  interior returns `(0, 0)`; a point just outside it returns a small vector, a
+  point at the saturation ring returns unit magnitude, and magnitude increases
+  monotonically between (the curve); the returned direction matches the gaze
+  direction; a diagonal point returns both components non-zero; the surface
+  size is honoured (a point that is forward on 640×480 is not on 640×640).
+  `GazeVectorFilter.update` with an explicit `now`: the output-vector EMA ramps
+  toward a held vector and decays toward `(0, 0)` when the input returns to the
+  dead zone; a single-sample `(0, 0)` between two equal vectors barely dents the
+  output (EMA, not a hard drop); the seed resets after the output settles at
+  zero; the map yields ≤ one `MOVE_*` + ≤ one `TURN_*` with the right signs.
 - **`pewpew.input.fire`.** A single edge fires once; two edges inside
   `debounce_s` fire once; edges `debounce_s` apart fire twice; three edges at
   `t = 0, 0.05, 0.20` with `debounce_s = 0.12` → 2 shots (the mid edge is
@@ -1002,6 +1170,20 @@ R11, §5), and per-task **Files** / **Interfaces** / failing-test-first
 
 ### Plan 3a — `docs/superpowers/plans/2026-09-05-doomed-prism-milestone-3a.md`
 
+The 14-task sequence below was implemented on `feature/doomed-prism-m3` and is
+CI-green. **R14 (2026-09-07)** re-plans only the tasks it touches, in a follow-up
+plan `docs/superpowers/plans/2026-09-07-doomed-prism-milestone-3a-radial-stick.md`
+executed on the same branch on top of the shipped work: task 3 (the C `MOVE_*`
+translation → analog `forwardmove`, mechanism per R14), task 5 (`ActionRouter`
+per-tick `MOVE` emit + `MOVE_MAGNITUDE_SCALE`), task 6 (`GazeZoneMap` /
+`GazeFilter` → `GazeStick` / `GazeVectorFilter`), task 8/9 (`InputPipeline`
+`surface` arg; simulator source unchanged), task 11 (`host_widget` builds the
+pipeline with the viewport size), tasks 12–14 (README line on the stick, the
+`test_c_patch_constants_match_the_python_enums` constant set, `ci_ipc_smoke.py`
+analog assertions, the §17 checklist geometry). Tasks 1, 2, 4, 7, 10 (protocol,
+server, build script, fire, engine) are untouched. The follow-up plan is itself
+audited by separate auditor agents before execution.
+
 1. `pewpew.ipc.protocol` — frame encode/decode, `Message`, `MessageType`,
    `IpcProtocolError`, the §5 `code` table as `Action`-independent ints;
    `tests/test_ipc_protocol.py`.
@@ -1019,8 +1201,8 @@ R11, §5), and per-task **Files** / **Interfaces** / failing-test-first
    *(A clean split point: tasks 1–4 are the transport core, R1 note.)*
 5. `pewpew.input.actions` — `Action` (values = §5 table), `HeldAction`,
    `ActionRouter` (sole quantiser); `tests/test_input_actions.py`.
-6. `pewpew.input.gaze` — `GazeZoneMap`, `GazeFilter` (single release rule,
-   `now`-argument time); `tests/test_input_gaze.py`.
+6. `pewpew.input.gaze` — **(R14)** `GazeStick` (radial vector), `GazeVectorFilter`
+   (output-vector EMA, `now`-argument time); `tests/test_input_gaze.py`.
 7. `pewpew.input.fire` — `FireArbiter` (discard-in-window), source protocols,
    `NullSpokenFireSource`, `tests/fakes/fake_fire.py` (`FakeSpokenFireSource`);
    `tests/test_input_fire.py`.
@@ -1107,12 +1289,17 @@ exits 0. `python -m pytest -q` green; `check_publication_safety.py --root .` and
   unbroken).
 - With **Crispy's SDL window minimised or behind the Raven Simulator** for the
   whole run:
-  - Gaze into the left turn band turns the DOOM view left; right band, right;
-    returning to the dead zone stops the turn within ~2 ticks.
-  - Gaze farther from the dead zone turns visibly faster than gaze just outside
-    it (progressive turn, §6).
-  - Gaze into the upper band walks forward; lower band, backward; an upper
-    corner walks forward while turning.
+  - **(R14)** Gaze left of the dead-zone circle turns the DOOM view left; right
+    of it, right; returning inside the circle stops the turn within ~2 ticks.
+  - **(R14)** Gaze farther from the circle turns visibly faster than gaze just
+    outside it, smoothly, with no step (the curved analog stick, §6).
+  - **(R14)** Gaze above the circle walks forward; below, backward — and, like
+    turn, **faster the farther out** (proportional forward, the finding-3 fix).
+    Backward is as reachable as forward (the symmetric-surface finding-1 fix).
+  - **(R14)** Gaze up-and-to-a-side walks forward while turning, both scaled
+    from one vector; sweeping the gaze across that diagonal never makes forward
+    stutter or cut out (the finding-2 fix — there are no zone boundaries to
+    cross).
   - A click fires one shot; five fast clicks fire fewer than five shots
     (debounce, `PULSE_HOLD_TICS` hold understood).
   - `F9` fires a shot through the same path; a click and an `F9` within ~30 ms
@@ -1145,17 +1332,23 @@ identity.
 **Hard decision, recorded in the single final field of
 `docs/validation/milestone-3a-result.md`.**
 
-- **PASS — IPC input path viable.** Gaze movement and progressive turn,
-  click-fire with debounce, spoken-fire fusion via the `F9` source, and
-  Enter-pause all drive the composited DOOM with the SDL window unfocused; every
-  lifecycle transition releases held input with no stuck key; one clean PID, no
-  orphan, socket removed, no `cleanup()` exception; the M2 framebuffer path
-  still advances.
+- **PASS — IPC input path viable.** The R14 radial stick drives the composited
+  DOOM with the SDL window unfocused — proportional turn **and** proportional
+  forward/back from one vector, a round dead zone, no forward stutter when the
+  gaze sweeps a diagonal, backward as reachable as forward — together with
+  click-fire debounce, `F9` spoken-fire fusion, and Enter-pause; every lifecycle
+  transition releases held input with no stuck key; one clean PID, no orphan,
+  socket removed, no `cleanup()` exception; the M2 framebuffer path still
+  advances. Moving feels as controllable as looking around (the R14 acceptance
+  bar).
 - **FAIL — IPC input path insufficient.** The engine connects and the handshake
-  completes, but injected events do not reliably drive gameplay (for example
-  `ev_mouse` turning is unusable, or `D_PostEvent` from the pump races the tic
-  and drops inputs). This opens a design task for the R5 keyboard-duty-cycle
-  turn or a different injection point — it does not discard the §4 IPC boundary.
+  completes, but injected input does not reliably drive gameplay — `ev_mouse`
+  turning is unusable, none of R14's three `forwardmove` mechanisms make forward
+  proportional, or `D_PostEvent` from the pump races the tic and drops inputs.
+  This opens a design task for the R5 keyboard-duty-cycle turn / R14 duty-cycle
+  forward or a different injection point, and (for forward only) allows the
+  documented degraded mode "continuous direction, digital forward" — it does not
+  discard the §4 IPC boundary or resurrect the zone model.
 - **BLOCKED/RETRY — implementation or environment failure.** Build, launch,
   connection, handshake, geometry, lifecycle, or evidence collection fails. Fix
   the named issue and repeat with a fresh PID. Does not select an injection
