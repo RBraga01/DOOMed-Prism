@@ -6,7 +6,7 @@ from collections.abc import Callable
 
 from pewpew.input.actions import Action, ActionRouter
 from pewpew.input.fire import FireArbiter, NullSpokenFireSource, SpokenFireSource
-from pewpew.input.gaze import GazeFilter, GazeZoneMap
+from pewpew.input.gaze import GazeStick, GazeVectorFilter
 from pewpew.input.source import InputSource
 from pewpew.ipc.protocol import Message
 
@@ -21,8 +21,8 @@ class InputPipeline:
         spoken_fire: SpokenFireSource | None = None,
     ) -> None:
         self._source = source
-        self._zones = GazeZoneMap(*surface)
-        self._filter = GazeFilter()
+        self._stick = GazeStick(*surface)
+        self._filter = GazeVectorFilter()
         self._fire = FireArbiter()
         self._router = ActionRouter(self._guarded_send)
         self._send = send
@@ -37,12 +37,12 @@ class InputPipeline:
 
     def tick(self, now: float) -> None:
         sample = self._source.sample(now)
-        raw = (
-            self._zones.resolve(*sample.gaze_xy)
+        vec = (
+            self._stick.resolve(*sample.gaze_xy)
             if sample.gaze_xy is not None
-            else frozenset()
+            else (0.0, 0.0)
         )
-        self._router.set_held(self._filter.update(raw, now))
+        self._router.set_held(self._filter.update(vec, now))
         if sample.activation_edge:
             self._fire.deliberate_action()
         if self._spoken.spoken_fire_edge() or sample.debug_fire_edge:

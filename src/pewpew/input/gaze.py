@@ -1,108 +1,96 @@
-"""Gaze-zone geometry and a dwell / jitter filter over the raw region set."""
+"""The radial analog stick and the vector filter over the gaze cursor (R14)."""
 
 from __future__ import annotations
 
+from math import hypot
+
 from pewpew.input.actions import Action, HeldAction
 
-DEAD_ZONE_HALF_W = 180
-DEAD_ZONE_HALF_H = 150
-TURN_RESPONSE_EXPONENT = 1.5
+DEAD_ZONE_RADIUS = 0.28
+OUTER_SATURATION = 0.95
+RESPONSE_EXPONENT = 1.5
 MAGNITUDE_EMA_ALPHA = 0.4
-DWELL_S = 0.15
-JITTER_GRACE_S = 0.02
-
-_TURN = (Action.TURN_LEFT, Action.TURN_RIGHT)
+RELEASE_EMA_ALPHA = 0.8
+EMA_ZERO_EPSILON = 1e-3
 
 
-class GazeZoneMap:
+def _clamp01(value: float) -> float:
+    return 0.0 if value < 0.0 else 1.0 if value > 1.0 else value
+
+
+class GazeStick:
+    """Map a gaze pixel to a curved, saturated 2-D stick vector ``(fx, fy)``."""
+
     def __init__(
         self,
         surface_w: int,
         surface_h: int,
         *,
-        dead_zone: tuple[int, int] = (DEAD_ZONE_HALF_W, DEAD_ZONE_HALF_H),
-        turn_exponent: float = TURN_RESPONSE_EXPONENT,
+        dead_zone_radius: float = DEAD_ZONE_RADIUS,
+        outer_saturation: float = OUTER_SATURATION,
+        response_exponent: float = RESPONSE_EXPONENT,
     ) -> None:
+        assert 0.0 < dead_zone_radius < outer_saturation <= 1.0, (
+            "need 0 < dead_zone_radius < outer_saturation <= 1"
+        )
+        assert response_exponent > 0.0, "response_exponent must be > 0"
         self._cx = surface_w // 2
         self._cy = surface_h // 2
-        self._hw, self._hh = dead_zone
-        self._exp = turn_exponent
+        self._half_w = surface_w / 2.0
+        self._half_h = surface_h / 2.0
+        self._dead = dead_zone_radius
+        self._outer = outer_saturation
+        self._exp = response_exponent
 
-    def _turn_magnitude(self, dx: int) -> float:
-        span = max(1, self._cx - self._hw)
-        m = (abs(dx) - self._hw) / span
-        return max(0.0, min(1.0, m)) ** self._exp
-
-    def resolve(self, x: int, y: int) -> frozenset[HeldAction]:
-        dx, dy = x - self._cx, y - self._cy
-        out_x, out_y = abs(dx) > self._hw, abs(dy) > self._hh
-        if not out_x and not out_y:
-            return frozenset()
-        if out_x and not out_y:
-            side = Action.TURN_LEFT if dx < 0 else Action.TURN_RIGHT
-            return frozenset({HeldAction(side, self._turn_magnitude(dx))})
-        if out_y and not out_x:
-            move = Action.MOVE_FORWARD if dy < 0 else Action.MOVE_BACKWARD
-            return frozenset({HeldAction(move, 1.0)})
-        move = Action.MOVE_FORWARD if dy < 0 else Action.MOVE_BACKWARD
-        side = Action.TURN_LEFT if dx < 0 else Action.TURN_RIGHT
-        return frozenset(
-            {HeldAction(move, 1.0), HeldAction(side, self._turn_magnitude(dx))}
-        )
+    def resolve(self, x: int, y: int) -> tuple[float, float]:
+        nx = (x - self._cx) / self._half_w
+        ny = (y - self._cy) / self._half_h
+        r_raw = hypot(nx, ny)
+        r = min(1.0, r_raw)
+        if r <= self._dead:
+            return (0.0, 0.0)
+        t = _clamp01((r - self._dead) / (self._outer - self._dead))
+        s = t**self._exp
+        # Unit direction from the UNCLAMPED norm, so a corner gaze trades off on
+        # the unit circle instead of over-driving both axes by up to ~41%.
+        return (nx / r_raw * s, ny / r_raw * s)
 
 
-class GazeFilter:
+class GazeVectorFilter:
+    """Dual-rate EMA over the stick vector, then map to held actions."""
+
     def __init__(
         self,
         *,
-        dwell_s: float = DWELL_S,
-        grace_s: float = JITTER_GRACE_S,
         ema_alpha: float = MAGNITUDE_EMA_ALPHA,
+        release_alpha: float = RELEASE_EMA_ALPHA,
     ) -> None:
-        self._dwell_s = dwell_s
-        self._grace_s = grace_s
         self._alpha = ema_alpha
-        self._since: dict[Action, float] = {}     # dwell start for a not-yet-emitted candidate
-        self._emitted: dict[Action, float] = {}   # emitted action -> last time it was present
-        self._ema: dict[Action, float] = {}
+        self._release_alpha = release_alpha
+        self._ex = 0.0
+        self._ey = 0.0
 
     def reset(self) -> None:
-        self._since.clear()
-        self._emitted.clear()
-        self._ema.clear()
+        self._ex = 0.0
+        self._ey = 0.0
 
-    def update(self, raw: frozenset[HeldAction], now: float) -> frozenset[HeldAction]:
-        raw_by_action = {h.action: h.magnitude for h in raw}
-        raw_nonempty = bool(raw_by_action)
-
-        for action in list(self._since):
-            if action not in raw_by_action:
-                del self._since[action]
-        for action in raw_by_action:
-            self._since.setdefault(action, now)
-
-        for action in list(self._emitted):
-            if action in raw_by_action:
-                self._emitted[action] = now
-            elif raw_nonempty:  # a different region — release now
-                del self._emitted[action]
-                self._ema.pop(action, None)
-            elif now - self._emitted[action] > self._grace_s:
-                del self._emitted[action]
-                self._ema.pop(action, None)
-
-        for action, first_seen in list(self._since.items()):
-            if action not in self._emitted and now - first_seen >= self._dwell_s:
-                self._emitted[action] = now
+    def update(self, vec: tuple[float, float], now: float) -> frozenset[HeldAction]:
+        del now  # retained for pipeline symmetry; the default filter does not read it
+        vx, vy = vec
+        alpha = self._release_alpha if (vx == 0.0 and vy == 0.0) else self._alpha
+        self._ex = alpha * vx + (1.0 - alpha) * self._ex
+        self._ey = alpha * vy + (1.0 - alpha) * self._ey
+        if hypot(self._ex, self._ey) < EMA_ZERO_EPSILON:
+            self._ex = 0.0
+            self._ey = 0.0
 
         out: set[HeldAction] = set()
-        for action in self._emitted:
-            if action in _TURN:
-                raw_m = raw_by_action.get(action, self._ema.get(action, 0.0))
-                prev = self._ema.get(action, raw_m)
-                m = self._alpha * raw_m + (1 - self._alpha) * prev
-                self._ema[action] = m
-            else:
-                m = 1.0
-            out.add(HeldAction(action, m))
+        if self._ey < 0.0:
+            out.add(HeldAction(Action.MOVE_FORWARD, -self._ey))
+        elif self._ey > 0.0:
+            out.add(HeldAction(Action.MOVE_BACKWARD, self._ey))
+        if self._ex < 0.0:
+            out.add(HeldAction(Action.TURN_LEFT, -self._ex))
+        elif self._ex > 0.0:
+            out.add(HeldAction(Action.TURN_RIGHT, self._ex))
         return frozenset(out)
