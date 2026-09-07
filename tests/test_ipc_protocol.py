@@ -40,6 +40,7 @@ def test_encode_is_little_endian_BBHi() -> None:
 def test_round_trips_every_message_type() -> None:
     for message in (
         Message.hello(), Message.bye(), Message.action(2, 0),
+        Message.action(1, 7500),  # R14 widened ACTION.value to [0, 10000]: mid-grid round-trips
         Message.turn(3, 25), Message.pulse(11), Message.discrete(20),
     ):
         decoded, rest = decode(encode(message))

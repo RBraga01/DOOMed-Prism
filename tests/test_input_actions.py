@@ -41,6 +41,23 @@ def test_quantiser_pins_the_mid_grid_and_round_up_cases_with_literals() -> None:
     assert vals[(MessageType.TURN, Action.TURN_RIGHT)] == 40         # 0.99 -> round(19.8)=20 -> 40 (rounds UP to full)
 
 
+def test_turn_axis_quantiser_is_discriminating() -> None:
+    # These magnitudes are fixed points of NEITHER quantiser path, so they only
+    # pass while _turn_value still applies the shared _quantise on the TURN axis.
+    router, sent = _router()
+    router.set_held(frozenset({HeldAction(Action.TURN_RIGHT, 0.5626)}))
+    # _quantise(0.5626) = round(11.252)/20 = 0.55 -> min(round(22.0), 40) = 22.
+    # The un-quantised round(0.5626 * 40) = round(22.504) = 23, so == 22 pins it.
+    assert sent == [Message.turn(Action.TURN_RIGHT, 22)]
+
+    router, sent = _router()  # fresh: TURN_LEFT is newly held, not in _held
+    router.set_held(frozenset({HeldAction(Action.TURN_LEFT, 0.0126)}))
+    # _quantise(0.0126) = round(0.252)/20 = 0.0 -> wire 0 -> set_held stays silent.
+    # The un-quantised round(0.0126 * 40) = round(0.504) = 1 would emit turn(3, 1).
+    assert sent == []
+    assert not [m for m in sent if m.type is MessageType.TURN]
+
+
 def test_move_emits_an_analog_frame_every_call_while_held_then_one_zero() -> None:
     router, sent = _router()
     for mag in (1.0, 0.75, 0.5):

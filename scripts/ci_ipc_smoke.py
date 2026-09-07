@@ -94,7 +94,7 @@ def main() -> int:
             time.sleep(0.05)
         else:
             _fail("framebuffer segment never became readable")
-        RAMP_START, RAMP_LEN = 120, 160          # 80 frames forward 0->max->0, then 80 backward
+        RAMP_START, RAMP_LEN = 120, 162          # 81 frames forward 0->max->0, then 81 backward
         counters: set[int] = set()
         ramp_counters: set[int] = set()
         for i in range(FLOOD_FRAMES):

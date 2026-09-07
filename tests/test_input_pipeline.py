@@ -28,11 +28,11 @@ def test_pipeline_builds_the_stick_on_the_source_widget_when_surface_is_none() -
 
 
 def test_finding_1_backward_is_reachable_and_symmetric_with_forward() -> None:
-    # No explicit surface -> 640x480. y=1 is far forward, y=478 is far backward.
-    fwd, sent_f = _pipe([InputSample((320, 1), False, False, False)] * 8)
+    # No explicit surface -> 640x480. y=0 is far forward, y=479 is far backward.
+    fwd, sent_f = _pipe([InputSample((320, 0), False, False, False)] * 8)
     for i in range(8):
         fwd.tick(now=i)
-    bwd, sent_b = _pipe([InputSample((320, 478), False, False, False)] * 8)
+    bwd, sent_b = _pipe([InputSample((320, 479), False, False, False)] * 8)
     for i in range(8):
         bwd.tick(now=i)
     f_vals = _values(sent_f, MessageType.ACTION, 1)  # MOVE_FORWARD
