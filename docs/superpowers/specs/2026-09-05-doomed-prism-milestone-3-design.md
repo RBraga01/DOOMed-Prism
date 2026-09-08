@@ -940,10 +940,15 @@ passes `surface` explicitly).
   removed when 3b's real detector lands). **(2026-09-08)** `F9` was retired —
   the Raven framework binds it as a shortcut, so it was consumed before it ever
   reached this event filter.
-- **(2026-09-08)** `ShortcutOverride` for any of the keys above → `accept()` +
-  consume, so the Raven framework cannot claim `Enter` (→ its focused exit
-  button) or `P` / `B` as a shortcut before the `KeyPress` arrives here. This
-  is the fix that makes any simulator key binding reliable.
+- **(2026-09-08)** The event filter is installed on **`QApplication`** (not just
+  the viewport): keys go to the *focused* widget, which the DOOM viewport almost
+  never is (the Raven framework holds focus), so a per-widget filter never saw
+  them and `RavenApp.keyPressEvent` did. Pointer events (`MouseMove` /
+  `MouseButtonPress` / `Leave`) are still gated to `obj is self._widget`. The
+  filter also `accept()`s `ShortcutOverride` for its keys so Raven cannot claim
+  `Enter` (→ its focused exit button) as a shortcut first. Together these make
+  any simulator key binding reliable. The filter object is parented to the
+  viewport, so Qt auto-removes it from `QApplication` when the host is torn down.
 - `Leave` → `gaze_xy` becomes `None` until the pointer returns, so
   release-all-on-leave is automatic.
 
