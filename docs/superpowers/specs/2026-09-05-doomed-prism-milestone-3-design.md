@@ -283,10 +283,10 @@ gone; `TURN_RESPONSE_EXPONENT` became the axis-shared `RESPONSE_EXPONENT`;
 | `EMA_ZERO_EPSILON` | `pewpew.input.gaze` | `1e-3` | vector magnitude | below this the smoothed vector is snapped to `(0, 0)` so a rested stick stops emitting (R14) |
 | `MAGNITUDE_STEPS` | `pewpew.input.actions` | `20` | — | quantisation of a smoothed magnitude before it is sent, for both axes (quantum `1/MAGNITUDE_STEPS`) |
 | `MOVE_MAGNITUDE_SCALE` | `pewpew.input.actions` | `10000` | wire units | magnitude `1.0` maps to this `ACTION.value` (R14) |
-| `TURN_MAX_MOUSE_DELTA` | `pewpew.input.actions` | `72` | mouse units | magnitude `1.0` maps to this signed per-tic x delta (gate-tunable; raised `40 → 72` on 2026-09-08 — R14's per-drain `TURN` coalescing removed a ~1.8× accumulation the pre-R14 per-frame apply had implied, so turn read slower than the correctly-scaled forward axis) |
+| `TURN_MAX_MOUSE_DELTA` | `pewpew.input.actions` | `160` | mouse units | magnitude `1.0` maps to this signed per-tic x delta (gate-tunable; raised `40 → 160` on 2026-09-08 — R14's per-drain `TURN` coalescing removed a ~1.8× accumulation the pre-R14 per-frame apply had implied, so a full-deflection gaze turn sat below DOOM's own walk-turn keyboard value; 160 -> 1280 angleturn/tic == DOOM run-turn) |
 | `FIRE_DEBOUNCE_S` | `pewpew.input.fire` | `0.12` | s | minimum interval between fused shots |
 | `PULSE_HOLD_TICS` | C `i_ipc_input.c` | `2` | game tics | how long a `PULSE` holds its key down before the paired keyup |
-| `IPC_TURN_CLAMP` | C `i_ipc_input.c` | `72` | mouse units | C-side clamp on an injected turn x value; kept `== TURN_MAX_MOUSE_DELTA` (raised `40 → 72` with it, 2026-09-08) |
+| `IPC_TURN_CLAMP` | C `i_ipc_input.c` | `160` | mouse units | C-side clamp on an injected turn x value; kept `== TURN_MAX_MOUSE_DELTA` (raised `40 → 160` with it, 2026-09-08) |
 | `MOVE_MAX_FORWARDMOVE` | C `i_ipc_input.c` | `50` | DOOM `forwardmove` units | `ACTION.value` `10000` maps to this signed `forwardmove` contribution (R14; `50` is DOOM's run value `forwardmove[1]` = `MAXPLMOVE`) |
 | `IPC_MOVE_STALE_PUMPS` | C `i_ipc_input.c` | `6` | pump calls | zero `ipc_forwardmove` after this many pumps with no `ACTION` frame — forward degrades on a frozen (not dead) supervisor, as turn already does (R14) |
 | `IPC_MOVE_WIRE_MAX` | C `i_ipc_input.c` | `10000` | wire units | the `ACTION.value` full-scale; `#define`d equal to `pewpew.input.actions.MOVE_MAGNITUDE_SCALE`, asserted by `test_c_patch_constants_match_the_python_enums` (R14) |

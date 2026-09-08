@@ -9,11 +9,12 @@ from dataclasses import dataclass
 from pewpew.ipc.protocol import Message
 
 MAGNITUDE_STEPS = 20
-# Raised 40 -> 72 (2026-09-08 gate): R14's per-drain TURN coalescing removed a
-# ~1.8x accumulation that the pre-R14 per-frame ev_mouse apply had implied, so
-# turn read slower than the (correctly scaled) forward axis. Kept in lockstep
-# with the C `IPC_TURN_CLAMP`. R11 gate-tunable.
-TURN_MAX_MOUSE_DELTA = 72
+# Raised 40 -> 160 across the 2026-09-08 gate: R14's per-drain TURN coalescing
+# removed a ~1.8x accumulation the pre-R14 per-frame ev_mouse apply had implied,
+# and at 40/72 a full-deflection gaze turn (data2*8 angleturn/tic) sat below
+# DOOM's own walk-turn keyboard value (640). 160 -> 1280/tic == DOOM's run-turn
+# at full deflection. Kept in lockstep with the C `IPC_TURN_CLAMP`. R11 gate-tunable.
+TURN_MAX_MOUSE_DELTA = 160
 MOVE_MAGNITUDE_SCALE = 10000
 
 
