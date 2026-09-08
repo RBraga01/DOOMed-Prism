@@ -1,154 +1,164 @@
 # Milestone 3a: IPC input path integration result
 
-This template records the decision-gate observations only. The **Final decision**
-field at the end is the sole authority for this run and begins as
-`PENDING — incomplete evidence`. Do not enter private paths, credentials, Raven
-source, executable locations, screenshots, or raw terminal output. Record the IPC
-address only as the placeholders `<tempdir>/doomed-prism-ipc-<pid>-<token>.sock`
-and `127.0.0.1:<port>`, and only its presence/absence plus the port number. Keep
-local evidence in ignored `artifacts/milestone-3/`.
+This document records the decision-gate observations. The **Final decision** field
+at the end is the sole authority for this run. Do not enter private paths,
+credentials, Raven source, executable locations, screenshots, or raw terminal
+output. The IPC address is recorded only as the placeholders
+`<tempdir>/doomed-prism-ipc-<pid>-<token>.sock` and `127.0.0.1:<port>`, and only
+its presence/absence plus the port number. Local evidence (captures, the numeric
+`$doomPid`, the listening port, GPU model, `ACTION.value` / `TURN.value` streams)
+is kept in ignored `artifacts/milestone-3/` and is not transcribed here.
 
 ## Run identification
 
-- Date (UTC): _not yet run_
+- Date (UTC): 2026-09-08
 - Tester: RBraga01
-- Repository commit: _fill in_ on `feature/doomed-prism-m3`
+- Repository commit: engine build under test `a90febf` on `feature/doomed-prism-m3`
+  (`IPC_TURN_CLAMP = 160`). The branch head then advanced to `a8fe89e` — a
+  CI-only merge of the pinned-Actions bump to Node 24 (`.github/workflows/ci.yml`
+  only); no runtime or behaviour change.
+- Manual interaction evidence was gathered across the R14 gate iteration on
+  2026-09-07/08 on Windows with the Raven Simulator, with Crispy's SDL window
+  minimised or behind the simulator and unfocused for the whole run.
 
 ## Environment
 
-- Windows version: _fill in_
-- Python version: _fill in_
-- Crispy Doom pinned tag/commit: _fill in from `crispy-doom.lock`_
-  (do not change this field without updating the lock file)
-- C compiler version: _fill in_
-- SDL2 development library version: _fill in_
-- Freedoom IWAD name: _fill in, or_ `not recorded (redistribution not permitted)`
-- Freedoom IWAD SHA-256: _fill in, or_ `not recorded (redistribution not permitted)`
-- GPU: _fill in_
-- Display scaling: 100% (system DPI 96) — confirm
+- Windows version: Windows 11, build 10.0.26200
+- Python version: 3.14 (local runtime); the CI matrix pins 3.12
+- Crispy Doom pinned tag/commit: `crispy-doom-7.1` @
+  `0a022e0ee6c74d9bab173ed9ee5212312e90ce3a` (from `crispy-doom.lock`;
+  `tarball_sha256 = f0eb02afb81780165ddc81583ed5648cbee8b3205bcc27e181b3f61eb26f8416`)
+- C compiler version: gcc 16.2.0 (MSYS2 UCRT64)
+- SDL2 development library version: 2.32.10 (MSYS2 UCRT64)
+- Freedoom IWAD name: `freedoom1.wad` (Freedoom Phase 1, 0.13.0 — freely
+  redistributable, so its identity is recorded)
+- Freedoom IWAD SHA-256:
+  `7323bcc168c5a45ff10749b339960e98314740a734c30d4b9f3337001f9e703d`
+- GPU: recorded in local evidence only
+- Display scaling: 100% (system DPI 96) — confirmed
 - No commercial IWAD identity is recorded anywhere in this document.
 
 ### Build and environment adaptation for this run
 
-- Record any local toolchain setup (MSYS2 / UCRT64, SDL2 dev packages, DLL
-  co-location) without private paths, exactly as the Milestone 2 result did.
-- Record any non-blocking system dialogs or antivirus interactions observed, and
-  whether gameplay or the shared-memory export was affected.
+- Crispy Doom is built from the pinned tag with the ordered patch series applied
+  cumulatively on disk (`crispy-doom-fb-export.diff` then
+  `crispy-doom-ipc-input.diff`) under an MSYS2 UCRT64 toolchain (gcc + SDL2 dev
+  packages, SDL2 runtime DLL co-located with the built executable), as in the
+  Milestone 2 result. Git-for-Windows `git` is used for `git apply`.
+- No blocking system dialogs or antivirus interactions affected gameplay or the
+  shared-memory export during the run.
 
 ## Launch and interaction
 
-- `python scripts/build_crispy.py`: _pass / fail_ — built `crispy-doom.exe` from
-  the pinned tag plus the committed patch series (`crispy-doom-fb-export.diff`
-  then `crispy-doom-ipc-input.diff`)
-- `python scripts/build_crispy.py --check`: _pass / fail_ (exit code: _fill in_;
-  restore + real `apply p1` + `apply --check p2`)
-- `git apply --stat patches/crispy-doom-ipc-input.diff`: _diffstat summary_ —
-  confirm it adds only `src/i_ipc_input.c` / `src/i_ipc_input.h` plus small hunks
-  in `src/d_loop.c`, `src/i_video.c`, `src/CMakeLists.txt`, within the
-  diff-minimality line ceiling (changed lines: _fill in_)
-- `doomed-prism validate`: _pass / fail_ (exit 0 expected; both runtime paths valid)
-- `python -m pytest -q`: _fill in_ (all green expected)
-- `python scripts/check_publication_safety.py --root .`: _exit code_ (0 expected)
-- `python scripts/check_publication_safety.py --root . --history`: _exit code_ (0 expected)
-- Gate environment set: `DOOMED_PRISM_WARP="1 1"`, `DOOMED_PRISM_DEBUG_FIRE=1` — confirm
-- `doomed-prism run-desktop`: _fill in_ (Raven `RAVEN APP READY LAUNCH SIGNAL` observed?)
-- Clean Crispy Doom PID baseline before launch: _none / not clean_
-- New Crispy Doom PID after launch (`$doomPid`, numeric only): _fill in_ (exactly one expected)
-- IPC socket present while running: _yes / no_ — POSIX placeholder
-  `<tempdir>/doomed-prism-ipc-<pid>-<token>.sock` present, **or** Windows
-  `127.0.0.1:<port>` listening (port: _fill in_; record presence and port only)
-- IPC socket gone after close: _yes / no_
-- `FrameReader` probe — `frame_counter` advancing while running: _yes / no_
-  (M2 framebuffer path unbroken)
-- Win32 `SetParent` in window tree: _absent / present_ (absent expected;
-  `GetParent=0`, `WS_CHILD=False`, `WS_POPUP=False`)
-- Crispy Doom SDL window independent and unfocused for the whole run: _yes / no_
+- `python scripts/build_crispy.py`: pass — built `crispy-doom.exe` from the pinned
+  tag plus the committed patch series
+- `python scripts/build_crispy.py --check`: pass (exit code 0; restore + real
+  `apply p1` + `apply --check p2`). The squelched whitespace warnings are the
+  pre-existing `crispy-doom-fb-export.diff` advisories, not new.
+- `git apply --stat patches/crispy-doom-ipc-input.diff`: 6 files, 419 insertions —
+  `src/i_ipc_input.c` (+361), `src/i_ipc_input.h` (+30) plus small hunks in
+  `src/d_loop.c` (+9), `src/i_video.c` (+8), `src/CMakeLists.txt` (+5), and one
+  clearly-marked hunk in `src/doom/g_game.c` (+6, the R14 `forwardmove` fold).
+  Only the allowed files; within the diff-minimality ceiling.
+- `doomed-prism validate`: pass (exit 0; both runtime paths valid)
+- `python -m pytest -q`: 208 passed, 6 skipped
+- `python scripts/check_publication_safety.py --root .`: exit 0
+- `python scripts/check_publication_safety.py --root . --history`: exit 0
+- Gate environment set: `DOOMED_PRISM_WARP="1 1"`, `DOOMED_PRISM_DEBUG_FIRE=1` — confirmed
+- `doomed-prism run-desktop`: pass — Raven `RAVEN APP READY LAUNCH SIGNAL` observed
+- Clean Crispy Doom PID baseline before launch: none (clean baseline)
+- New Crispy Doom PID after launch: exactly one (numeric value in local evidence)
+- IPC socket present while running: yes — Windows `127.0.0.1:<port>` listening,
+  owned by the PewPew process (presence and port recorded in local evidence)
+- IPC socket gone after close: yes — listening port released
+- `FrameReader` probe — `frame_counter` advancing while running: yes (M2
+  framebuffer path unbroken; the composited viewport is live in every mode)
+- Win32 `SetParent` in window tree: absent (`GetParent = 0`, `WS_CHILD = False`,
+  `WS_POPUP = False`)
+- Crispy Doom SDL window independent and unfocused for the whole run: yes
 
 ## Objective-check results
 
-Mark each `yes`, `no`, `not available`, or `not run`, with a short non-sensitive
-observation. All view/movement checks are performed with **Crispy's SDL window
-minimised or behind the Raven Simulator, and unfocused, for the whole run**.
+All view/movement checks were performed with **Crispy's SDL window minimised or
+behind the Raven Simulator, and unfocused, for the whole run**.
 
 | Check | Result | Non-sensitive observation |
 | --- | --- | --- |
-| Exactly one new crispy-doom PID | _fill in_ | |
-| IPC socket present while running / gone after close | _fill in_ | placeholder address + port only |
-| `FrameReader` `frame_counter` advancing (M2 path unbroken) | _fill in_ | |
-| Turn: left of the dead-zone circle turns left; right turns right; stop within ~3–5 ticks | _fill in_ | |
-| Turn rate rises with distance from the circle, smoothly, no step | _fill in_ | |
-| Forward/back proportional to gaze eccentricity (or degraded single-speed — say which) | _fill in_ | |
-| Backward as reachable and as fast as forward (no ~9 px sliver) | _fill in_ | |
-| Diagonal sweep never makes forward stutter or cut out | _fill in_ | |
-| One click fires one shot | _fill in_ | |
-| Five fast clicks fire fewer than five shots (debounce) | _fill in_ | |
-| `B` fires a shot through the same path | _fill in_ | |
-| Click + `B` within ~30 ms fire once (fusion) | _fill in_ | |
-| `P` (or `Enter`) shows the `PAUSED` overlay and pauses; press again to resume | _fill in_ | |
-| No SDL-window focus used at any point | _fill in_ | |
-| No `SetParent` anywhere in the window tree | _fill in_ | |
+| Exactly one new crispy-doom PID | yes | one supervised child against a clean baseline |
+| IPC socket present while running / gone after close | yes / yes | Windows `127.0.0.1:<port>`; presence + port in local evidence only |
+| `FrameReader` `frame_counter` advancing (M2 path unbroken) | yes | composited view animates in all five modes |
+| Turn: left of the dead-zone circle turns left; right turns right; stop within ~3–5 ticks | yes | returning gaze inside the circle stops the turn smoothly, no abrupt cut |
+| Turn rate rises with distance from the circle, smoothly, no step | yes | curved analog response; full deflection reaches DOOM's run-turn rate |
+| Forward/back proportional to gaze eccentricity (or degraded single-speed — say which) | yes — **proportional forward** | speed rises with eccentricity; noticeable acceleration toward the edge |
+| Backward as reachable and as fast as forward (no ~9 px sliver) | yes | radial model is symmetric; no dead sliver below centre |
+| Diagonal sweep never makes forward stutter or cut out | yes | forward + turn come from **one vector**; sweeping the diagonal stays smooth |
+| One click fires one shot | yes | |
+| Five fast clicks fire fewer than five shots (debounce) | yes | `PULSE_HOLD_TICS` hold understood |
+| `B` fires a shot through the same path | yes | debug spoken-fire source, `DOOMED_PRISM_DEBUG_FIRE=1` |
+| Click + `B` within ~30 ms fire once (fusion) | yes | single shot on the fused edge |
+| `P` (or `Enter`) shows the `PAUSED` overlay and pauses; press again to resume | yes | neither key closes the simulator (the `QApplication`-level `ShortcutOverride` fix) |
+| No SDL-window focus used at any point | yes | Raven Simulator held focus throughout |
+| No `SetParent` anywhere in the window tree | yes | independent top-level SDL window |
 
 ## Per-mode evidence
 
-Mark each observation `yes`, `no`, `not available`, or `not run`. For an available
-mode, prove gaze-driven view motion **and** a fired shot inside the composited
-viewport with the SDL window unfocused, using one short local Freedoom-only video
-or two time-separated captures. The evidence field may contain only local
-filenames, never a path.
+Gaze-driven view motion **and** a fired shot were shown inside the composited
+viewport, with the SDL window unfocused, for Raw and every available optical
+mode. Evidence files are retained under ignored `artifacts/milestone-3/`; only
+their existence is recorded here.
 
-| Mode | Available | Gaze-driven view motion in composited viewport | Fired shot visible in composited viewport | SDL window unfocused throughout | Local evidence filenames | Non-sensitive observation |
+| Mode | Available | Gaze-driven view motion in composited viewport | Fired shot visible in composited viewport | SDL window unfocused throughout | Local evidence | Non-sensitive observation |
 | --- | --- | --- | --- | --- | --- | --- |
-| Raw | _fill in_ | _fill in_ | _fill in_ | _fill in_ | _fill in / not captured_ | |
-| Night | _fill in_ | _fill in_ | _fill in_ | _fill in_ | _fill in / not captured_ | full dynamic proof expected here |
-| Day | _fill in_ | _fill in_ | _fill in_ | _fill in_ | _fill in / not captured_ | |
-| Outdoors | _fill in_ | _fill in_ | _fill in_ | _fill in_ | _fill in / not captured_ | |
-| Camera | _fill in_ | _fill in_ | _fill in_ | _fill in_ | _fill in / not captured_ | |
+| Raw | yes | yes | yes | yes | captured (local) | |
+| Night | yes | yes | yes | yes | captured (local) | full dynamic proof — gaze steering the stick, proportional turn and forward, a fired shot, and Enter-pause in one capture |
+| Day | yes | yes | yes | yes | captured (local) | |
+| Outdoors | yes | yes | yes | yes | captured (local) | |
+| Camera | yes | yes | yes | yes | captured (local) | |
 
-Note on evidence depth: Night must carry full dynamic (two-or-more different game
+Note on evidence depth: Night carries full dynamic (two-or-more different game
 states) proof — gaze steering the radial stick, proportional turn and forward, a
-fired shot, and Enter-pause. Raw, Day, Outdoors, and Camera may be lighter, as in
-the Milestone 2 gate, since all modes share one paint and capture pipeline. Any
-clip promoted into tracked `docs/media/` is Freedoom-only and was reviewed
-frame-by-frame for usernames, paths, and IWAD identity.
+fired shot, and Enter-pause. Raw, Day, Outdoors, and Camera are lighter, as in
+the Milestone 2 gate, since all modes share one paint and capture pipeline. No
+clip was promoted into tracked `docs/media/`; any that were would be
+Freedoom-only and reviewed frame-by-frame for usernames, paths, and IWAD
+identity.
 
 ## Lifecycle-check results
 
-Every transition must release all held inputs — no stuck key, no held turn
-persisting — and leave no orphan process.
+Every transition released all held inputs — no stuck key, no held turn
+persisting — and left no orphan process.
 
 | Transition | Held input released, no stuck key | No orphan / clean PID | `cleanup()` exception | Non-sensitive observation |
 | --- | --- | --- | --- | --- |
-| Sleep / conceal (or hide host) → pause + overlay; resume → unpause | _fill in_ | _n/a_ | _n/a_ | held turn from before the hide must not persist |
-| Kill PewPew while the stick is held forward-and-turning → DOOM stops turning **and stops moving forward**, keeps running on SDL | _fill in_ | _fill in_ | _n/a_ | no orphan after its window is closed |
-| Normal close → `cleanup()` stop-tick → release-all → server-close → reader-close → engine-stop | _fill in_ | _fill in_ | _none expected_ | one PID gone; socket path removed |
-
-If the recorded PID remains present after PewPew closes, or if `cleanup()` raises
-an exception, record `orphan process present` or the exception type and message
-and set this run's Final decision to `BLOCKED/RETRY — implementation or
-environment failure`. Stopping an orphan manually is allowed only for local
-cleanup: it cannot turn this run into PASS. Retain the failed observation, then
-use a new PID and repeat the entire run with fresh per-mode evidence before
-considering another decision.
+| Sleep / conceal (or hide host) → pause + overlay; resume → unpause | yes | _n/a_ | _n/a_ | a turn held before the conceal did not persist on resume; the view stayed put |
+| Kill PewPew while the stick is held forward-and-turning → DOOM stops turning **and stops moving forward**, keeps running on SDL | yes | yes | _n/a_ | forward stopped within the stale-pump window; Crispy kept rendering; no orphan after its window closed |
+| Normal close → `cleanup()` stop-tick → release-all → server-close → reader-close → engine-stop | yes | yes | none | one PID gone; listening port released; independently reconfirmed — zero project processes and no listening IPC port after close |
 
 ## Automated verification after manual run
 
-- `python -m pytest -q`: _fill in_
-- `git diff --check`: _clean / errors_
+- `python -m pytest -q`: 208 passed, 6 skipped
+- `git diff --check`: clean
 - Exact-path documentation staging inspected (`git diff --cached --name-status`
-  lists only the two `milestone-3a-*.md` paths): _yes / no_
-- `git diff --cached --check`: _clean / errors_
-- `python scripts/check_publication_safety.py --root .` after staging: _exit code_
-- `python scripts/check_publication_safety.py --root . --history` after staging: _exit code_
-- `git status --short`: _empty / not empty_ after the commit
+  lists only the two `milestone-3a-*.md` paths): yes
+- `git diff --cached --check`: clean
+- `python scripts/check_publication_safety.py --root .` after staging: exit 0
+- `python scripts/check_publication_safety.py --root . --history` after staging: exit 0
+- `git status --short`: empty after the commit
 
 ## Final decision
 
-**Final decision:** PENDING — incomplete evidence
+**Final decision:** PASS — IPC input path viable
 
-_This run has not been performed yet. Replace this line with exactly one of the
-five decisions below once the checklist is complete._
+The R14 radial stick drives the composited DOOM with the SDL window unfocused —
+**proportional forward** and proportional turn from **one vector**, a round
+dead-zone circle, no forward stutter when the gaze sweeps a **diagonal**,
+**backward as reachable as forward** — together with click-fire debounce, `B`
+spoken-fire fusion, and Enter-pause. Every lifecycle transition releases held
+input with no stuck key; one clean PID, no orphan, socket removed, no
+`cleanup()` exception; the M2 framebuffer path still advances. Moving feels as
+controllable as looking around (the R14 acceptance bar).
 
-Use only one of these decisions after completing the checklist:
+The five decisions this field may hold:
 
 - **PASS — IPC input path viable.** The R14 radial stick drives the composited
   DOOM with the SDL window unfocused — proportional turn **and**
