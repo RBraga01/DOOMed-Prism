@@ -17,8 +17,12 @@ not a native SDL window.*
 
 **Milestone 3a — input & IPC:** implemented on `feature/doomed-prism-m3`.
 Gaze drives a **radial analog stick** — proportional turn *and* forward/back
-from one gaze vector — over a local IPC socket to the patched engine; the
-Windows/Raven decision gate is still pending.
+from one gaze vector — over a local IPC socket to the patched engine. The
+Windows/Raven decision gate **passed** on 2026-09-08: IPC-only input drives the
+composited DOOM with Crispy's SDL window unfocused, every lifecycle transition
+releases held input with no stuck key or orphan process, and the Milestone 2
+framebuffer path is unaffected. See
+[`docs/validation/milestone-3a-result.md`](docs/validation/milestone-3a-result.md).
 
 - Validated on Windows 11 in **Raw, Night, Day, Outdoors and Camera** modes —
   live, updating pixels composited by the real Raven Simulator compositor.
@@ -226,8 +230,9 @@ IWADs, game assets, executables, or other proprietary third‑party content. Use
 must provide any required external software or game data separately and in
 accordance with its applicable license.
 
-The Raven Simulator is used as a development and validation target. Behaviour on
-real Raven Prism hardware has not yet been validated.
+The Raven Simulator is the development and validation target, and Milestones 2
+and 3a passed their decision gates against it. Behaviour on real Raven Prism
+hardware has not yet been validated.
 
 ## License
 
