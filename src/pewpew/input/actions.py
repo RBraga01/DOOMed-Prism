@@ -9,7 +9,11 @@ from dataclasses import dataclass
 from pewpew.ipc.protocol import Message
 
 MAGNITUDE_STEPS = 20
-TURN_MAX_MOUSE_DELTA = 40
+# Raised 40 -> 72 (2026-09-08 gate): R14's per-drain TURN coalescing removed a
+# ~1.8x accumulation that the pre-R14 per-frame ev_mouse apply had implied, so
+# turn read slower than the (correctly scaled) forward axis. Kept in lockstep
+# with the C `IPC_TURN_CLAMP`. R11 gate-tunable.
+TURN_MAX_MOUSE_DELTA = 72
 MOVE_MAGNITUDE_SCALE = 10000
 
 

@@ -41,22 +41,31 @@ def test_mouse_move_then_press_then_sample(qtbot) -> None:
     assert src.sample(0.0).activation_edge is False  # one-shot
 
 
-def test_return_key_sets_pause_edge_once(qtbot) -> None:
-    w = _widget(qtbot)
-    src = SimulatorInputSource(w)
-    QApplication.sendEvent(
-        w, QKeyEvent(QEvent.Type.KeyPress, Qt.Key_Return, Qt.NoModifier)
-    )
-    assert src.sample(0.0).pause_edge is True
-    assert src.sample(0.0).pause_edge is False
+def test_return_and_p_keys_set_pause_edge_once(qtbot) -> None:
+    for key in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_P):
+        w = _widget(qtbot)
+        src = SimulatorInputSource(w)
+        QApplication.sendEvent(w, QKeyEvent(QEvent.Type.KeyPress, key, Qt.NoModifier))
+        assert src.sample(0.0).pause_edge is True
+        assert src.sample(0.0).pause_edge is False
 
 
 def test_handled_keys_are_consumed_so_they_never_reach_the_raven_framework(qtbot) -> None:
     w = _widget(qtbot)
     src = SimulatorInputSource(w)
-    enter = QKeyEvent(QEvent.Type.KeyPress, Qt.Key_Return, Qt.NoModifier)
-    assert src.eventFilter(w, enter) is True
+    for key in (Qt.Key_Return, Qt.Key_P):
+        assert src.eventFilter(w, QKeyEvent(QEvent.Type.KeyPress, key, Qt.NoModifier)) is True
     assert src.sample(0.0).pause_edge is True
+
+
+def test_shortcut_override_is_claimed_for_our_keys_so_raven_cannot_grab_them(qtbot) -> None:
+    w = _widget(qtbot)
+    src = SimulatorInputSource(w)
+    for key in (Qt.Key_Return, Qt.Key_P):
+        ev = QKeyEvent(QEvent.Type.ShortcutOverride, key, Qt.NoModifier)
+        assert src.eventFilter(w, ev) is True and ev.isAccepted()
+    other = QKeyEvent(QEvent.Type.ShortcutOverride, Qt.Key_A, Qt.NoModifier)
+    assert src.eventFilter(w, other) is False
 
 
 def test_unhandled_keys_pass_through(qtbot) -> None:
@@ -66,12 +75,13 @@ def test_unhandled_keys_pass_through(qtbot) -> None:
     assert src.eventFilter(w, other) is False
 
 
-def test_f9_passes_through_when_debug_fire_is_disabled(qtbot, monkeypatch) -> None:
+def test_b_key_passes_through_when_debug_fire_is_disabled(qtbot, monkeypatch) -> None:
     monkeypatch.delenv("DOOMED_PRISM_DEBUG_FIRE", raising=False)
     w = _widget(qtbot)
     src = SimulatorInputSource(w)
-    f9 = QKeyEvent(QEvent.Type.KeyPress, Qt.Key_F9, Qt.NoModifier)
-    assert src.eventFilter(w, f9) is False
+    b = QKeyEvent(QEvent.Type.KeyPress, Qt.Key_B, Qt.NoModifier)
+    assert src.eventFilter(w, b) is False
+    assert src.eventFilter(w, QKeyEvent(QEvent.Type.ShortcutOverride, Qt.Key_B, Qt.NoModifier)) is False
 
 
 def test_leave_clears_gaze(qtbot) -> None:
@@ -82,19 +92,19 @@ def test_leave_clears_gaze(qtbot) -> None:
     assert src.sample(0.0).gaze_xy is None
 
 
-def test_f9_debug_fire_edge_only_with_env(qtbot, monkeypatch) -> None:
+def test_b_key_debug_fire_edge_only_with_env(qtbot, monkeypatch) -> None:
     monkeypatch.setenv("DOOMED_PRISM_DEBUG_FIRE", "1")
     w = _widget(qtbot)
     src = SimulatorInputSource(w)
-    QApplication.sendEvent(w, QKeyEvent(QEvent.Type.KeyPress, Qt.Key_F9, Qt.NoModifier))
+    QApplication.sendEvent(w, QKeyEvent(QEvent.Type.KeyPress, Qt.Key_B, Qt.NoModifier))
     assert src.sample(0.0).debug_fire_edge is True
 
 
-def test_f9_is_inert_without_the_env(qtbot, monkeypatch) -> None:
+def test_b_key_is_inert_without_the_env(qtbot, monkeypatch) -> None:
     monkeypatch.delenv("DOOMED_PRISM_DEBUG_FIRE", raising=False)
     w = _widget(qtbot)
     src = SimulatorInputSource(w)
-    QApplication.sendEvent(w, QKeyEvent(QEvent.Type.KeyPress, Qt.Key_F9, Qt.NoModifier))
+    QApplication.sendEvent(w, QKeyEvent(QEvent.Type.KeyPress, Qt.Key_B, Qt.NoModifier))
     assert src.sample(0.0).debug_fire_edge is False
 
 

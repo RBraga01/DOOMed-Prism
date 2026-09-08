@@ -198,7 +198,7 @@ click in the simulator — §6) and a *spoken-fire* edge (spoken "pew pew" — �
 In 3a the deliberate-action edge is the simulator click, and the spoken-fire
 edge is stubbed: the pipeline's `spoken_fire` source is a `NullSpokenFireSource`
 that never fires, and the 3a gate drives the fusion path without real audio via
-an env-gated `F9` key on `SimulatorInputSource` that sets
+an env-gated `B` key on `SimulatorInputSource` that sets
 `InputSample.debug_fire_edge`, which `InputPipeline.tick` routes into
 `FireArbiter.spoken_fire()`. `tests/fakes` carries a `FakeSpokenFireSource` with
 a `trigger()` method for the fusion unit tests. 3b supplies the real acoustic
@@ -213,7 +213,7 @@ from the start.
 
 `SimulatorInputSource` reads gaze position (mouse), focused-element activation
 (click → `activation_edge`), the physical button (Enter → `pause_edge`), and —
-only when `DOOMED_PRISM_DEBUG_FIRE` is set — an `F9` debug key
+only when `DOOMED_PRISM_DEBUG_FIRE` is set — a `B` debug key
 (→ `debug_fire_edge`) that stands in for a spoken "pew pew", all from Qt events
 on the host widget, never from Raven APIs directly (§6: "The game bridge does
 not depend directly on Raven APIs"). `PrismInputSource` is a documented stub
@@ -283,10 +283,10 @@ gone; `TURN_RESPONSE_EXPONENT` became the axis-shared `RESPONSE_EXPONENT`;
 | `EMA_ZERO_EPSILON` | `pewpew.input.gaze` | `1e-3` | vector magnitude | below this the smoothed vector is snapped to `(0, 0)` so a rested stick stops emitting (R14) |
 | `MAGNITUDE_STEPS` | `pewpew.input.actions` | `20` | — | quantisation of a smoothed magnitude before it is sent, for both axes (quantum `1/MAGNITUDE_STEPS`) |
 | `MOVE_MAGNITUDE_SCALE` | `pewpew.input.actions` | `10000` | wire units | magnitude `1.0` maps to this `ACTION.value` (R14) |
-| `TURN_MAX_MOUSE_DELTA` | `pewpew.input.actions` | `40` | mouse units | magnitude `1.0` maps to this signed per-tic x delta (gate-tunable) |
+| `TURN_MAX_MOUSE_DELTA` | `pewpew.input.actions` | `72` | mouse units | magnitude `1.0` maps to this signed per-tic x delta (gate-tunable; raised `40 → 72` on 2026-09-08 — R14's per-drain `TURN` coalescing removed a ~1.8× accumulation the pre-R14 per-frame apply had implied, so turn read slower than the correctly-scaled forward axis) |
 | `FIRE_DEBOUNCE_S` | `pewpew.input.fire` | `0.12` | s | minimum interval between fused shots |
 | `PULSE_HOLD_TICS` | C `i_ipc_input.c` | `2` | game tics | how long a `PULSE` holds its key down before the paired keyup |
-| `IPC_TURN_CLAMP` | C `i_ipc_input.c` | `40` | mouse units | C-side clamp on an injected turn x value |
+| `IPC_TURN_CLAMP` | C `i_ipc_input.c` | `72` | mouse units | C-side clamp on an injected turn x value; kept `== TURN_MAX_MOUSE_DELTA` (raised `40 → 72` with it, 2026-09-08) |
 | `MOVE_MAX_FORWARDMOVE` | C `i_ipc_input.c` | `50` | DOOM `forwardmove` units | `ACTION.value` `10000` maps to this signed `forwardmove` contribution (R14; `50` is DOOM's run value `forwardmove[1]` = `MAXPLMOVE`) |
 | `IPC_MOVE_STALE_PUMPS` | C `i_ipc_input.c` | `6` | pump calls | zero `ipc_forwardmove` after this many pumps with no `ACTION` frame — forward degrades on a frozen (not dead) supervisor, as turn already does (R14) |
 | `IPC_MOVE_WIRE_MAX` | C `i_ipc_input.c` | `10000` | wire units | the `ACTION.value` full-scale; `#define`d equal to `pewpew.input.actions.MOVE_MAGNITUDE_SCALE`, asserted by `test_c_patch_constants_match_the_python_enums` (R14) |
@@ -567,7 +567,7 @@ inputs with no stuck key and no orphan process?**
 - `FireArbiter` + the two source protocols (R7), with the real deliberate-action
   (simulator click) source and `NullSpokenFireSource` in 3a.
 - `InputSource` protocol + `SimulatorInputSource` (Qt events on the host,
-  including the env-gated `F9` → `debug_fire_edge` gate scaffold) +
+  including the env-gated `B` → `debug_fire_edge` gate scaffold) +
   `PrismInputSource` stub.
 - `InputPipeline`: the one unit that wires source → gaze → fire → router →
   server, ticked from the host timer, with `release_all()`.
@@ -657,7 +657,7 @@ PewPew Engine process                              Crispy Doom process (patch se
 | `pewpew.input.gaze` | Python | **(R14)** `GazeStick(surface_w, surface_h, *, dead_zone_radius=0.28, outer_saturation=0.95, response_exponent=1.5)` (`__init__` asserts `0 < dz < outer_sat <= 1`, `exp > 0`): `resolve(x, y) -> tuple[float, float]` — the curved, saturated stick vector `(fx, fy)`, `hypot == s`, direction from the unclamped norm; stateless. `GazeVectorFilter(*, ema_alpha=0.4, release_alpha=0.8)`: `update(vec, now) -> frozenset[HeldAction]` (dual-rate EMA, snap `< EMA_ZERO_EPSILON`, map to ≤ one `MOVE_*` + ≤ one `TURN_*` as raw-float magnitudes — quantisation is `ActionRouter`'s) and `reset() -> None` (`e_prev` → `(0, 0)`, called by `release_all`). No dwell, grace, or region rule. Pure; time via `now` only. | `pewpew.input.actions` |
 | `pewpew.input.fire` | Python | `FireArbiter(*, debounce_s=0.12)`: `deliberate_action()`, `spoken_fire()`, `poll(now) -> bool`, `reset()`. `DeliberateActionSource` / `SpokenFireSource` protocols; `NullSpokenFireSource`. Pure; time via `poll(now)` only. | — |
 | `pewpew.input.source` | Python | `InputSource` protocol: `sample(now) -> InputSample`. `InputSample(gaze_xy: tuple[int,int] | None, activation_edge: bool, pause_edge: bool, debug_fire_edge: bool)`. `PrismInputSource` stub. | — |
-| `pewpew.input.simulator_source` | Python | `SimulatorInputSource(widget)`: a Qt event filter tracks mouse position, left-press edges, `Return`/`Enter` edges, and (env-gated) `F9` edges; `sample(now)` returns and clears the accumulated `InputSample`. `Leave` sets `gaze_xy = None`. | PySide6, `pewpew.input.source` |
+| `pewpew.input.simulator_source` | Python | `SimulatorInputSource(widget)`: a Qt event filter tracks mouse position, left-press edges, `Return`/`Enter` edges, and (env-gated) `B` edges; `sample(now)` returns and clears the accumulated `InputSample`. `Leave` sets `gaze_xy = None`. | PySide6, `pewpew.input.source` |
 | `pewpew.input.pipeline` | Python | `InputPipeline(source, send, *, surface=None, spoken_fire=NullSpokenFireSource())`: builds `GazeStick`, `GazeVectorFilter`, `FireArbiter`, `ActionRouter(sink=_guarded_send)` where `_guarded_send` wraps the `send` callable in `try/except OSError`. `host_widget` always passes an explicit `surface=(viewport.width(), viewport.height())`; `surface=None` is a test-only fallback that reads `source.widget`. `tick(now)`, `release_all()` (resets filter + fire + router, calls `filter.reset()`), `toggle_pause()`, `paused: bool`. The single integration unit. Time via `tick(now)`. | all of the above |
 | `pewpew.engine` (modified) | Python | `start(*, ipc_address: str | None = None)` injects `DOOMED_PRISM_IPC_ADDR`; when `DOOMED_PRISM_WARP` is set, appends `-warp <value> -skill <DOOMED_PRISM_SKILL or 3>` to argv; `ipc_address` property. `stop()` does **not** touch the socket path (the server owns it). Mirrors the existing `frame_segment_name` env handling. | existing |
 | `pewpew.host_widget` (modified) | Python | `showEvent`: `IpcServer.start()`, `engine.start(ipc_address=…)`, build `InputPipeline`. `_on_tick`: **first** `server.poll()` + disconnect handling (before any early return), then, once past the M2 frame-wait, `pipeline.tick(now)`. `hideEvent` / child-disconnect / handshake-timeout wired per §12. `cleanup()` extended per R9. A `_PauseOverlay` child driven by `pipeline.paused`. | `pewpew.input.pipeline`, `pewpew.ipc.server` |
@@ -908,7 +908,7 @@ carried a separate `cooldown_s` for a future auto-fire guard; cut as YAGNI.)
 tick). `SpokenFireSource` protocol: `spoken_fire_edge() -> bool`.
 `NullSpokenFireSource` returns `False` forever (3a default). `FakeSpokenFireSource`
 (test fakes) exposes `trigger()` and is used in the fusion unit tests. In the 3a
-gate the spoken-fire edge comes from `SimulatorInputSource`'s env-gated `F9`
+gate the spoken-fire edge comes from `SimulatorInputSource`'s env-gated `B`
 key via `InputSample.debug_fire_edge`, not a `SpokenFireSource`.
 
 ## 9. Input sources
@@ -933,11 +933,17 @@ passes `surface` explicitly).
   after normalization. (Pre-R14 the pipeline built a 640×640 `GazeZoneMap` over
   this 640×480 space — finding 1.)
 - `MouseButtonPress` (left) → `activation_edge`.
-- `KeyPress` `Return` / `Enter` → `pause_edge` (§6 "Enter represents the
-  physical ClickButton"; ClickButton opens pause / emergency).
-- `KeyPress` `F9`, **only when `DOOMED_PRISM_DEBUG_FIRE` is set** →
+- `KeyPress` `Return` / `Enter` / `P` → `pause_edge` (§6 "Enter represents the
+  physical ClickButton"; `P` is a collision-free alias for the simulator).
+- `KeyPress` `B`, **only when `DOOMED_PRISM_DEBUG_FIRE` is set** →
   `debug_fire_edge` (gate scaffold for spoken-fire fusion without real audio;
-  removed when 3b's real detector lands).
+  removed when 3b's real detector lands). **(2026-09-08)** `F9` was retired —
+  the Raven framework binds it as a shortcut, so it was consumed before it ever
+  reached this event filter.
+- **(2026-09-08)** `ShortcutOverride` for any of the keys above → `accept()` +
+  consume, so the Raven framework cannot claim `Enter` (→ its focused exit
+  button) or `P` / `B` as a shortcut before the `KeyPress` arrives here. This
+  is the fix that makes any simulator key binding reliable.
 - `Leave` → `gaze_xy` becomes `None` until the pointer returns, so
   release-all-on-leave is automatic.
 
@@ -1321,7 +1327,7 @@ a pre-connected `socketpair` injector.
     raising (the `_guarded_send` `OSError` swallow).
 - **`pewpew.input.simulator_source`** with `pytest-qt`: synthesised
   `QMouseEvent` / `QKeyEvent` produce the right `InputSample`; `Leave` clears
-  `gaze_xy`; `F9` sets `debug_fire_edge` only when `DOOMED_PRISM_DEBUG_FIRE` is
+  `gaze_xy`; `B` sets `debug_fire_edge` only when `DOOMED_PRISM_DEBUG_FIRE` is
   set; edges are one-shot.
 - **`pewpew.engine`.** `start(ipc_address=…)` puts `DOOMED_PRISM_IPC_ADDR` in
   the child env (a fake `popen_factory` captures `env=`); with
@@ -1449,7 +1455,7 @@ before execution.
    `tests/test_input_fire.py`.
 8. `pewpew.input.source` + `pewpew.input.simulator_source` — `InputSource`,
    `InputSample` (incl. `debug_fire_edge`), `SimulatorInputSource` (with the
-   env-gated `F9` handler), `PrismInputSource` stub;
+   env-gated `B` handler), `PrismInputSource` stub;
    `tests/test_input_source.py` + a `pytest-qt` module.
 9. `pewpew.input.pipeline` — `InputPipeline.tick` / `release_all` /
    `toggle_pause` / `paused`; `tests/test_input_pipeline.py`,
@@ -1505,7 +1511,7 @@ placeholders `<tempdir>/doomed-prism-ipc-<pid>-<token>.sock` and
 **The hard question.** Does IPC-only normalized input drive real DOOM gameplay
 inside the Qt viewport — the radial analog stick (proportional turn **and**
 forward/back from one gaze vector, round dead zone), debounced click-fire,
-fused spoken-fire (the `F9` debug source with `DOOMED_PRISM_DEBUG_FIRE=1`),
+fused spoken-fire (the `B` debug source with `DOOMED_PRISM_DEBUG_FIRE=1`),
 Enter-pause — with Crispy's SDL window unfocused the entire time, does moving
 feel as controllable as looking around, and does every lifecycle transition
 release all held input with no stuck key/forward and no orphan?
@@ -1551,7 +1557,7 @@ exits 0. `python -m pytest -q` green; `check_publication_safety.py --root .` and
     slow abruptly, or cut out.
   - A click fires one shot; five fast clicks fire fewer than five shots
     (debounce, `PULSE_HOLD_TICS` hold understood).
-  - `F9` fires a shot through the same path; a click and an `F9` within ~30 ms
+  - `B` fires a shot through the same path; a click and a `B` within ~30 ms
     fire once (fusion).
   - `Enter` shows the `PAUSED` overlay and pauses; `Enter` again resumes. No
     SDL-window focus was used at any point.
@@ -1592,7 +1598,7 @@ identity.
   DOOM with the SDL window unfocused — proportional turn **and** proportional
   forward/back from one vector, a round dead zone, no forward stutter when the
   gaze sweeps a diagonal, backward as reachable as forward — together with
-  click-fire debounce, `F9` spoken-fire fusion, and Enter-pause; every lifecycle
+  click-fire debounce, `B` spoken-fire fusion, and Enter-pause; every lifecycle
   transition releases held input with no stuck key; one clean PID, no orphan,
   socket removed, no `cleanup()` exception; the M2 framebuffer path still
   advances. Moving feels as controllable as looking around (the R14 acceptance

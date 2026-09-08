@@ -82,9 +82,9 @@ minimised or behind the Raven Simulator, and unfocused, for the whole run**.
 | Diagonal sweep never makes forward stutter or cut out | _fill in_ | |
 | One click fires one shot | _fill in_ | |
 | Five fast clicks fire fewer than five shots (debounce) | _fill in_ | |
-| `F9` fires a shot through the same path | _fill in_ | |
-| Click + `F9` within ~30 ms fire once (fusion) | _fill in_ | |
-| `Enter` shows the `PAUSED` overlay and pauses; `Enter` resumes | _fill in_ | |
+| `B` fires a shot through the same path | _fill in_ | |
+| Click + `B` within ~30 ms fire once (fusion) | _fill in_ | |
+| `P` (or `Enter`) shows the `PAUSED` overlay and pauses; press again to resume | _fill in_ | |
 | No SDL-window focus used at any point | _fill in_ | |
 | No `SetParent` anywhere in the window tree | _fill in_ | |
 
@@ -154,7 +154,7 @@ Use only one of these decisions after completing the checklist:
   DOOM with the SDL window unfocused — proportional turn **and**
   proportional forward/back from one vector, a round dead zone, no forward
   stutter when the gaze sweeps a diagonal, backward as reachable as forward —
-  together with click-fire debounce, `F9` spoken-fire fusion, and Enter-pause;
+  together with click-fire debounce, `B` spoken-fire fusion, and Enter-pause;
   every lifecycle transition releases held input with no stuck key; one clean
   PID, no orphan, socket removed, no `cleanup()` exception; the M2 framebuffer
   path still advances. Moving feels as controllable as looking around (the R14

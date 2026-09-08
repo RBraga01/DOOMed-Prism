@@ -8,7 +8,7 @@ and any local notes under the ignored `artifacts/milestone-3/` directory.
 The hard question this gate answers: **does IPC-only normalized input drive real
 DOOM gameplay inside the Qt viewport — the radial analog stick (proportional turn
 **and** forward/back from one gaze vector, a round dead zone), debounced
-click-fire, fused spoken-fire (the `F9` debug source with
+click-fire, fused spoken-fire (the `B` debug source with
 `DOOMED_PRISM_DEBUG_FIRE=1`), and Enter-pause — with Crispy's SDL window
 unfocused the entire time, and does every lifecycle transition release all held
 inputs with no stuck key and no orphan process?**
@@ -155,9 +155,12 @@ non-sensitive observation.
     or cut out.
   - [ ] **One click fires one shot. Five fast clicks fire fewer than five shots**
     (debounce; the `PULSE_HOLD_TICS` key hold is understood).
-  - [ ] **`F9` fires a shot through the same path** (spoken-fire fusion via the
-    debug source). **A click and an `F9` within ~30 ms fire once.**
-  - [ ] **`Enter` shows the `PAUSED` overlay and pauses; `Enter` again resumes.**
+  - [ ] **`B` fires a shot through the same path** (spoken-fire fusion via the
+    debug source, `DOOMED_PRISM_DEBUG_FIRE=1`). **A click and a `B` within
+    ~30 ms fire once.** (`B` replaced `F9` on 2026-09-08 — Raven bound `F9` as
+    a shortcut so it never reached the input filter.)
+  - [ ] **`P` (or `Enter`) shows the `PAUSED` overlay and pauses; press again
+    to resume.** Neither key closes the simulator (the `ShortcutOverride` fix).
     No SDL-window focus was used at any point during the run.
 - [ ] **No Win32 `SetParent` anywhere** in the window tree. Crispy Doom's SDL
   window stays an independent top-level window, never reparented into the Qt
@@ -218,7 +221,7 @@ one of:
   DOOM with the SDL window unfocused — proportional turn **and**
   proportional forward/back from one vector, a round dead zone, no forward
   stutter when the gaze sweeps a diagonal, backward as reachable as forward —
-  together with click-fire debounce, `F9` spoken-fire fusion, and Enter-pause;
+  together with click-fire debounce, `B` spoken-fire fusion, and Enter-pause;
   every lifecycle transition releases held input with no stuck key; one clean
   PID, no orphan, socket removed, no `cleanup()` exception; the M2 framebuffer
   path still advances. Moving feels as controllable as looking around (the R14

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from fakes.fake_fire import FakeSpokenFireSource
 from fakes.fake_input import FakeInputSource
+from pewpew.input.actions import MOVE_MAGNITUDE_SCALE, TURN_MAX_MOUSE_DELTA
 from pewpew.input.pipeline import InputPipeline
 from pewpew.input.source import InputSample
 from pewpew.ipc.protocol import Message, MessageType
@@ -80,9 +81,10 @@ def test_finding_3_forward_and_turn_scale_together_with_eccentricity() -> None:
         fwd_vals.append(f[-1])
         turn_vals.append(t[-1])
     assert fwd_vals == sorted(fwd_vals) and turn_vals == sorted(turn_vals)
-    assert fwd_vals[-1] == 10000 and turn_vals[-1] == 40  # both saturate
+    assert fwd_vals[-1] == MOVE_MAGNITUDE_SCALE and turn_vals[-1] == TURN_MAX_MOUSE_DELTA  # both saturate
     for f, t in zip(fwd_vals, turn_vals):
-        assert abs(f / 10000 - t / 40) <= 1 / 20   # normalized curves agree within a quantum
+        # normalized curves agree within a quantum
+        assert abs(f / MOVE_MAGNITUDE_SCALE - t / TURN_MAX_MOUSE_DELTA) <= 1 / 20
 
 
 def test_activation_edge_produces_a_fire_pulse() -> None:

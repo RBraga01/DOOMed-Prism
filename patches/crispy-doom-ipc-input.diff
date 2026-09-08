@@ -157,7 +157,7 @@ index 00000000..6a774780
 +#define IPC_PROTOCOL_VERSION 1
 +#define IPC_HELLO_TIMEOUT_MS 2000
 +#define PULSE_HOLD_TICS 2
-+#define IPC_TURN_CLAMP 40
++#define IPC_TURN_CLAMP 72            /* == pewpew.input.actions.TURN_MAX_MOUSE_DELTA (raised 40->72, 2026-09-08 gate) */
 +#define IPC_MOVE_WIRE_MAX 10000      /* == pewpew.input.actions.MOVE_MAGNITUDE_SCALE */
 +#define MOVE_MAX_FORWARDMOVE 50      /* DOOM forwardmove[1] run value == MAXPLMOVE */
 +#define IPC_MOVE_STALE_PUMPS 6       /* pumps with no ACTION frame -> stop moving  */

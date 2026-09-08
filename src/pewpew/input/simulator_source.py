@@ -1,4 +1,4 @@
-"""Read gaze / click / Enter / F9 from Qt events on the host widget."""
+"""Read gaze / click / pause / debug-fire from Qt events on the host widget."""
 
 from __future__ import annotations
 
@@ -8,6 +8,14 @@ from PySide6.QtCore import QEvent, QObject, Qt
 from PySide6.QtWidgets import QWidget
 
 from pewpew.input.source import InputSample
+
+# Gate key bindings. Return/Enter is the physical ClickButton stand-in (§9); P
+# is an alias that never collides with the Raven framework's own shortcuts. B
+# stands in for a spoken "pew pew" when DOOMED_PRISM_DEBUG_FIRE is set.
+# (F9 was retired 2026-09-08: Raven binds it as a shortcut, so it was consumed
+# before it ever reached this event filter.)
+_PAUSE_KEYS = frozenset({Qt.Key_Return, Qt.Key_Enter, Qt.Key_P})
+_DEBUG_KEY = Qt.Key_B
 
 
 class SimulatorInputSource(QObject):
@@ -26,6 +34,9 @@ class SimulatorInputSource(QObject):
     def widget(self) -> QWidget:
         return self._widget
 
+    def _handles(self, key: int) -> bool:
+        return key in _PAUSE_KEYS or (key == _DEBUG_KEY and self._debug_fire)
+
     def eventFilter(self, obj: QObject, event: QEvent) -> bool:
         etype = event.type()
         if etype == QEvent.Type.MouseMove:
@@ -38,13 +49,20 @@ class SimulatorInputSource(QObject):
             self._activation = True
         elif etype == QEvent.Type.Leave:
             self._gaze = None
+        elif etype == QEvent.Type.ShortcutOverride:
+            # Claim our keys BEFORE Qt dispatches them as shortcuts, otherwise
+            # the Raven framework eats Enter (-> its focused exit button) and
+            # P / B never arrive as a plain KeyPress. accept() + True means
+            # "deliver this to me as a key press instead of firing a shortcut".
+            if self._handles(event.key()):
+                event.accept()
+                return True
         elif etype == QEvent.Type.KeyPress:
             key = event.key()
-            if key in (Qt.Key_Return, Qt.Key_Enter):
+            if key in _PAUSE_KEYS:
                 self._pause = True
-                return True  # consume it: an un-filtered Enter reaches the
-                # Raven framework and activates its focused button (exit).
-            if key == Qt.Key_F9 and self._debug_fire:
+                return True  # consume it (see ShortcutOverride above)
+            if key == _DEBUG_KEY and self._debug_fire:
                 self._debug_edge = True
                 return True
         return False
