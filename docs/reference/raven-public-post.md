@@ -41,12 +41,12 @@ Per Parth Arora / Raven, this means:
   Prism is ARM64, and Raven compiled this repository directly on the glasses and
   ran it successfully. That is external evidence the project builds and runs
   natively on Prism ARM64 hardware.
-- **Not the same as an in-repo ARM64 gate.** This repository does not yet
-  maintain a reproducible ARM64 build/runtime gate in its own CI.
-  - "Does it compile and run on Raven Prism ARM64?" — yes, externally validated
-    by Raven.
-  - "Does this repository have its own reproducible ARM64 CI/gate?" — not yet.
-  - These are separate claims and are not conflated.
+- **In-repo ARM64 CI gate.** CI builds the patched engine and runs the POSIX
+  shared-memory runtime smoke natively on `ubuntu-24.04-arm` (aarch64) on every
+  push, so "does it build and run on ARM64 Linux?" is now answered in this
+  repository, not only by Raven. That is still distinct from the physical Prism:
+  CI proves ARM64 *Linux*; Raven proved the *device* itself (its toolchain,
+  runtime, and compositor). Both point the same way.
 - **Separate from the input-interaction work.** The gaze/input interaction is
   developed on a separate branch and is not part of this documentation change.
   The Raven hardware evidence establishes that the port / build / rendering path
@@ -60,6 +60,6 @@ Per Parth Arora / Raven, this means:
 
 ## Still outstanding
 
-- A reproducible ARM64 build/runtime gate maintained by this repository's CI.
 - An in-repo, milestone-gated validation of the gaze input interaction on
-  physical Raven Prism hardware (distinct from Raven's own demonstration above).
+  physical Raven Prism hardware (distinct from Raven's own demonstration above,
+  and from the ARM64-Linux CI gate).
