@@ -28,9 +28,23 @@ are visible and updating inside the Raven Simulator.
   recorded.
 - The Python test suite is **103 passed, 5 skipped** (the skips are POSIX‑only
   tests that do not run on Windows).
+- **Raven has publicly shown DOOMed Prism running on physical Raven Prism
+  hardware.** On September 9, 2026, Raven Resonance posted on LinkedIn that the
+  port runs on the glasses — *"the first natively compiled (non web app) DOOM
+  port on lightweight eyewear"* — and credited Ricardo Braga. Raven's Parth Arora
+  separately confirmed on Raven's Discord that the repository compiled and ran
+  **directly on the Prism, with no device-specific changes**. Quotes and details:
+  [`docs/reference/raven-public-post.md`](docs/reference/raven-public-post.md).
+  This is Raven-side public recognition, not affiliation, sponsorship, or a
+  formal endorsement.
 
-**Not yet validated:** ARM64, and real Raven Prism hardware. The simulator is an
-optical preview, not the device.
+**Native Raven Prism / ARM64 build and run — externally validated by Raven**, who
+compiled this repository directly on the glasses and ran it, with no
+device-specific changes.
+
+**Still outstanding:** a reproducible ARM64 build/runtime gate in this
+repository's CI, and this project's own on-hardware validation. The simulator is
+an optical preview, not the device.
 
 ## What comes next
 
@@ -192,7 +206,11 @@ What this does and does not prove:
   captures the game. CI does not run the Raven Simulator.
 - **Linux CI** proves the portable pieces — the build, the shared‑memory
   protocol, the teardown — independently of Raven.
-- **ARM64** remains outstanding.
+- **ARM64** builds and runs on physical Raven Prism hardware — externally
+  validated by Raven, who compiled this repository directly on the glasses (see
+  [`docs/reference/raven-public-post.md`](docs/reference/raven-public-post.md)).
+  A reproducible ARM64 build/runtime gate in this repository's CI is still
+  missing.
 
 ## Publication safety
 
@@ -220,8 +238,15 @@ IWADs, game assets, executables, or other proprietary third‑party content. Use
 must provide any required external software or game data separately and in
 accordance with its applicable license.
 
-The Raven Simulator is used as a development and validation target. Behaviour on
-real Raven Prism hardware has not yet been validated.
+The Raven Simulator on Windows is this repository's own development and
+validation environment. Raven has separately compiled this project directly from
+the repository on physical Raven Prism hardware and run it successfully — a
+native ARM64 build and run demonstrated on the device, though a reproducible
+in-repo ARM64 CI gate is still missing. Raven's post and its engineer's
+confirmation
+([`docs/reference/raven-public-post.md`](docs/reference/raven-public-post.md))
+are evidence and public recognition, not affiliation, sponsorship, or a formal
+endorsement.
 
 ## License
 
