@@ -43,7 +43,8 @@ compiled this repository directly on the glasses and ran it, with no
 device-specific changes.
 
 **Still outstanding:** a reproducible ARM64 build/runtime gate in this
-repository's CI, and this project's own on-hardware validation. The simulator is
+repository's CI, and this project's own controlled, reproducible on-hardware
+validation (distinct from Raven's external demonstration above). The simulator is
 an optical preview, not the device.
 
 ## What comes next
