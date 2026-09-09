@@ -38,12 +38,13 @@ are visible and updating inside the Raven Simulator.
   This is Raven-side public recognition, not affiliation, sponsorship, or a
   formal endorsement.
 
-**Native Raven Prism / ARM64 build and run — externally validated by Raven**, who
-compiled this repository directly on the glasses and ran it, with no
+**Native ARM64 build and run — gated in CI *and* externally validated by Raven.**
+GitHub Actions builds the patched engine and runs the POSIX shared-memory runtime
+smoke natively on `ubuntu-24.04-arm` (aarch64) alongside x86_64; Raven separately
+compiled this repository directly on the physical Prism and ran it, with no
 device-specific changes.
 
-**Still outstanding:** a reproducible ARM64 build/runtime gate in this
-repository's CI, and this project's own controlled, reproducible on-hardware
+**Still outstanding:** this project's own controlled, reproducible *on-glasses*
 validation (distinct from Raven's external demonstration above). The simulator is
 an optical preview, not the device.
 
@@ -201,17 +202,22 @@ GitHub Actions (`.github/workflows/ci.yml`) runs, on `ubuntu-latest`:
   640×480 segment, an advancing `frame_counter`, and a clean teardown with no
   leftover `/dev/shm` segment.
 
+The build and the POSIX runtime smoke test also run natively on
+`ubuntu-24.04-arm` (aarch64), so every push exercises the patched engine on
+ARM64 Linux as well as x86_64.
+
 What this does and does not prove:
 
 - **Windows + Raven Simulator** is the actual proof that Raven's compositor
   captures the game. CI does not run the Raven Simulator.
 - **Linux CI** proves the portable pieces — the build, the shared‑memory
   protocol, the teardown — independently of Raven.
-- **ARM64** builds and runs on physical Raven Prism hardware — externally
-  validated by Raven, who compiled this repository directly on the glasses (see
+- **ARM64** is gated in CI — a native `ubuntu-24.04-arm` build of the patched
+  engine plus the POSIX runtime smoke — and was separately validated by Raven on
+  the physical Prism (see
   [`docs/reference/raven-public-post.md`](docs/reference/raven-public-post.md)).
-  A reproducible ARM64 build/runtime gate in this repository's CI is still
-  missing.
+  What CI does *not* cover is on-glasses behaviour: the Raven compositor and the
+  Prism's own runtime, not ARM64 as such.
 
 ## Publication safety
 
@@ -240,11 +246,10 @@ must provide any required external software or game data separately and in
 accordance with its applicable license.
 
 The Raven Simulator on Windows is this repository's own development and
-validation environment. Raven has separately compiled this project directly from
-the repository on physical Raven Prism hardware and run it successfully — a
-native ARM64 build and run demonstrated on the device, though a reproducible
-in-repo ARM64 CI gate is still missing. Raven's post and its engineer's
-confirmation
+validation environment, and CI additionally builds and runs the patched engine
+natively on aarch64 Linux. Raven has separately compiled this project directly
+from the repository on physical Raven Prism hardware and run it successfully.
+Raven's post and its engineer's confirmation
 ([`docs/reference/raven-public-post.md`](docs/reference/raven-public-post.md))
 are evidence and public recognition, not affiliation, sponsorship, or a formal
 endorsement.
