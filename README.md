@@ -18,7 +18,7 @@ not a native SDL window.*
 **Milestone 3a — input & IPC:** implemented on `feature/doomed-prism-m3`.
 Gaze drives a **radial analog stick** — proportional turn *and* forward/back
 from one gaze vector — over a local IPC socket to the patched engine. The
-Windows/Raven decision gate **passed** on 2026-09-08: IPC-only input drives the
+Windows / Raven Simulator decision gate **passed** on 2026-09-08: IPC-only input drives the
 composited DOOM with Crispy's SDL window unfocused, every lifecycle transition
 releases held input with no stuck key or orphan process, and the Milestone 2
 framebuffer path is unaffected. See
@@ -34,9 +34,25 @@ framebuffer path is unaffected. See
   recorded.
 - The Python test suite is green (the only skips are POSIX‑only tests that do
   not run on Windows).
+- **Raven has publicly shown DOOMed Prism running on physical Raven Prism
+  hardware.** On September 9, 2026, Raven Resonance posted on LinkedIn that the
+  port runs on the glasses — *"the first natively compiled (non web app) DOOM
+  port on lightweight eyewear"* — and credited Ricardo Braga. Raven's Parth Arora
+  separately confirmed on Raven's Discord that the repository compiled and ran
+  **directly on the Prism, with no device-specific changes**. Quotes and details:
+  [`docs/reference/raven-public-post.md`](docs/reference/raven-public-post.md).
+  This is Raven-side public recognition, not affiliation, sponsorship, or a
+  formal endorsement.
 
-**Not yet validated:** ARM64, and real Raven Prism hardware. The simulator is an
-optical preview, not the device.
+**Native ARM64 build and run — gated in CI *and* externally validated by Raven.**
+GitHub Actions builds the patched engine and runs the POSIX shared-memory runtime
+smoke natively on `ubuntu-24.04-arm` (aarch64) alongside x86_64; Raven separately
+compiled this repository directly on the physical Prism and ran it, with no
+device-specific changes.
+
+**Still outstanding:** this project's own controlled, reproducible *on-glasses*
+validation (distinct from Raven's external demonstration above). The simulator is
+an optical preview, not the device.
 
 ## What comes next
 
@@ -196,13 +212,22 @@ GitHub Actions (`.github/workflows/ci.yml`) runs, on `ubuntu-latest`:
   640×480 segment, an advancing `frame_counter`, and a clean teardown with no
   leftover `/dev/shm` segment.
 
+The build and the POSIX runtime smoke test also run natively on
+`ubuntu-24.04-arm` (aarch64), so every push exercises the patched engine on
+ARM64 Linux as well as x86_64.
+
 What this does and does not prove:
 
 - **Windows + Raven Simulator** is the actual proof that Raven's compositor
   captures the game. CI does not run the Raven Simulator.
 - **Linux CI** proves the portable pieces — the build, the shared‑memory
   protocol, the teardown — independently of Raven.
-- **ARM64** remains outstanding.
+- **ARM64** is gated in CI — a native `ubuntu-24.04-arm` build of the patched
+  engine plus the POSIX runtime smoke — and was separately validated by Raven on
+  the physical Prism (see
+  [`docs/reference/raven-public-post.md`](docs/reference/raven-public-post.md)).
+  What CI does *not* cover is on-glasses behaviour: the Raven compositor and the
+  Prism's own runtime, not ARM64 as such.
 
 ## Publication safety
 
@@ -230,9 +255,15 @@ IWADs, game assets, executables, or other proprietary third‑party content. Use
 must provide any required external software or game data separately and in
 accordance with its applicable license.
 
-The Raven Simulator is the development and validation target, and Milestones 2
-and 3a passed their decision gates against it. Behaviour on real Raven Prism
-hardware has not yet been validated.
+The Raven Simulator on Windows is this repository's own development and
+validation environment — Milestones 2 and 3a passed their decision gates
+against it — and CI additionally builds and runs the patched engine natively
+on aarch64 Linux. Raven has separately compiled this project directly from the
+repository on physical Raven Prism hardware and run it successfully. Raven's
+post and its engineer's confirmation
+([`docs/reference/raven-public-post.md`](docs/reference/raven-public-post.md))
+are evidence and public recognition, not affiliation, sponsorship, or a formal
+endorsement.
 
 ## License
 
