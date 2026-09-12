@@ -20,6 +20,11 @@ is kept in ignored `artifacts/milestone-3/` and is not transcribed here.
 - Manual interaction evidence was gathered across the R14 gate iteration on
   2026-09-07/08 on Windows with the Raven Simulator, with Crispy's SDL window
   minimised or behind the simulator and unfocused for the whole run.
+- **Scripted re-check, 2026-09-12** (Claude, at RBraga01's direction): the four
+  rows marked "Scripted" were re-verified directly against the same built
+  engine and the real pewpew code, not through Raven's own UI (not scriptable
+  here). Everything else in this document is RBraga01's direct observation in
+  the Raven Simulator.
 
 ## Environment
 
@@ -71,10 +76,12 @@ is kept in ignored `artifacts/milestone-3/` and is not transcribed here.
 - IPC socket present while running: yes — Windows `127.0.0.1:<port>` listening,
   owned by the PewPew process (presence and port recorded in local evidence)
 - IPC socket gone after close: yes — listening port released
-- `FrameReader` probe — `frame_counter` advancing while running: yes (M2
-  framebuffer path unbroken; the composited viewport is live in every mode)
-- Win32 `SetParent` in window tree: absent (`GetParent = 0`, `WS_CHILD = False`,
-  `WS_POPUP = False`)
+- `FrameReader` probe — `frame_counter` advancing while running: yes. Scripted:
+  a standalone `DoomProcess` + `FrameReader` against the same binary —
+  `frame_counter` 4 → 65 over 2s, strictly increasing.
+- Win32 `SetParent` in window tree: absent. Scripted: `EnumWindows` /
+  `GetParent` / `GetWindowLongPtr` on the live `crispy-doom.exe` — `GetParent =
+  0`, not `WS_CHILD`, not `WS_POPUP`.
 - Crispy Doom SDL window independent and unfocused for the whole run: yes
 
 ## Objective-check results
@@ -86,7 +93,7 @@ behind the Raven Simulator, and unfocused, for the whole run**.
 | --- | --- | --- |
 | Exactly one new crispy-doom PID | yes | one supervised child against a clean baseline |
 | IPC socket present while running / gone after close | yes / yes | Windows `127.0.0.1:<port>`; presence + port in local evidence only |
-| `FrameReader` `frame_counter` advancing (M2 path unbroken) | yes | composited view animates in all five modes |
+| `FrameReader` `frame_counter` advancing (M2 path unbroken) | yes | composited view animates in all five modes; scripted re-check (see Launch and interaction) |
 | Turn: left of the dead-zone circle turns left; right turns right; stop within ~3–5 ticks | yes | returning gaze inside the circle stops the turn smoothly, no abrupt cut |
 | Turn rate rises with distance from the circle, smoothly, no step | yes | curved analog response; full deflection reaches DOOM's run-turn rate |
 | Forward/back proportional to gaze eccentricity (or degraded single-speed — say which) | yes — **proportional forward** | speed rises with eccentricity; noticeable acceleration toward the edge |
@@ -98,7 +105,7 @@ behind the Raven Simulator, and unfocused, for the whole run**.
 | Click + `B` within ~30 ms fire once (fusion) | yes | single shot on the fused edge |
 | `P` (or `Enter`) shows the `PAUSED` overlay and pauses; press again to resume | yes | neither key closes the simulator (the `QApplication`-level `ShortcutOverride` fix) |
 | No SDL-window focus used at any point | yes | Raven Simulator held focus throughout |
-| No `SetParent` anywhere in the window tree | yes | independent top-level SDL window |
+| No `SetParent` anywhere in the window tree | yes | independent top-level SDL window; scripted re-check (see Launch and interaction) |
 
 ## Per-mode evidence
 
@@ -130,8 +137,8 @@ persisting — and left no orphan process.
 
 | Transition | Held input released, no stuck key | No orphan / clean PID | `cleanup()` exception | Non-sensitive observation |
 | --- | --- | --- | --- | --- |
-| Sleep / conceal (or hide host) → pause + overlay; resume → unpause | yes | _n/a_ | _n/a_ | a turn held before the conceal did not persist on resume; the view stayed put |
-| Kill PewPew while the stick is held forward-and-turning → DOOM stops turning **and stops moving forward**, keeps running on SDL | yes | yes | _n/a_ | forward stopped within the stale-pump window; Crispy kept rendering; no orphan after its window closed |
+| Sleep / conceal (or hide host) → pause + overlay; resume → unpause | yes | _n/a_ | _n/a_ | Scripted: drove the real `DoomHostWidget` directly via `.hide()`/`.show()` (the checklist's own alternative to Raven's conceal gesture). `router._held` was empty immediately after hide and stayed empty through resume with gaze moved off-corner; view-change rate 31 → 2 → 6 — no residual turn. Overlay-visible isn't observable this way (Qt hides all children of a hidden parent) but is already confirmed by the `P`/`Enter` test above. |
+| Kill PewPew while the stick is held forward-and-turning → DOOM stops turning **and stops moving forward**, keeps running on SDL | yes | yes | _n/a_ | Scripted: a standalone IPC holder flooded full-deflection forward+turn, then was hard-killed. View-change rate dropped 43 → 9 while `frame_counter` kept advancing; `crispy-doom.exe` survived. Manual cleanup needed `taskkill /F` afterward — DOOM's own quit prompt needs a keypress this probe didn't send, not an M3a defect. |
 | Normal close → `cleanup()` stop-tick → release-all → server-close → reader-close → engine-stop | yes | yes | none | one PID gone; listening port released; independently reconfirmed — zero project processes and no listening IPC port after close |
 
 ## Automated verification after manual run
