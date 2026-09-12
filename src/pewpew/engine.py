@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import secrets
+import shlex
 import subprocess
 import sys
 from collections.abc import Callable, Mapping
@@ -52,6 +53,7 @@ class DoomProcess:
         )
         self._process: _Process | None = None
         self._frame_segment_name: str | None = None
+        self._ipc_address: str | None = None
 
     def __enter__(self) -> DoomProcess:
         return self
@@ -59,12 +61,15 @@ class DoomProcess:
     def __exit__(self, *_: object) -> None:
         self.stop()
 
-    def start(self) -> int:
+    def start(self, *, ipc_address: str | None = None) -> int:
         """Launch the configured Crispy Doom executable and return its PID."""
         if self.poll() is None and self._process is not None:
             raise EngineAlreadyRunning("Crispy Doom is already running")
         name = f"doomed-prism-fb-{os.getpid()}-{secrets.token_hex(4)}"
         child_env = {**os.environ, "DOOMED_PRISM_FB_NAME": name}
+        if ipc_address:
+            child_env["DOOMED_PRISM_IPC_ADDR"] = ipc_address
+            self._ipc_address = ipc_address
         self._process = self._popen_factory(self._command(), child_env)
         self._frame_segment_name = name
         return self._process.pid
@@ -78,6 +83,10 @@ class DoomProcess:
     @property
     def frame_segment_name(self) -> str | None:
         return self._frame_segment_name
+
+    @property
+    def ipc_address(self) -> str | None:
+        return self._ipc_address
 
     def stop(self, timeout_s: float = 3.0) -> None:
         """Stop the live child gracefully, escalating only after a timeout."""
@@ -112,7 +121,7 @@ class DoomProcess:
         self._release_segment()
 
     def _command(self) -> list[str]:
-        return [
+        command = [
             str(self._config.crispy_exe),
             "-iwad",
             str(self._config.iwad),
@@ -122,6 +131,11 @@ class DoomProcess:
             "-height",
             str(self._config.viewport_height),
         ]
+        warp = os.environ.get("DOOMED_PRISM_WARP")
+        if warp:
+            command += ["-warp", *shlex.split(warp), "-skill",
+                        os.environ.get("DOOMED_PRISM_SKILL", "3")]
+        return command
 
     def _release_segment(self) -> None:
         name = self._frame_segment_name
