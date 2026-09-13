@@ -15,8 +15,14 @@ not a native SDL window.*
 
 ## Current status
 
-**Milestone 2 is complete: framebuffer integration is viable.** Real DOOM frames
-are visible and updating inside the Raven Simulator.
+**Milestone 3a — input & IPC:** implemented on `feature/doomed-prism-m3`.
+Gaze drives a **radial analog stick** — proportional turn *and* forward/back
+from one gaze vector — over a local IPC socket to the patched engine. The
+Windows / Raven Simulator decision gate **passed** on 2026-09-08: IPC-only input drives the
+composited DOOM with Crispy's SDL window unfocused, every lifecycle transition
+releases held input with no stuck key or orphan process, and the Milestone 2
+framebuffer path is unaffected. See
+[`docs/validation/milestone-3a-result.md`](docs/validation/milestone-3a-result.md).
 
 - Validated on Windows 11 in **Raw, Night, Day, Outdoors and Camera** modes —
   live, updating pixels composited by the real Raven Simulator compositor.
@@ -26,8 +32,8 @@ are visible and updating inside the Raven Simulator.
   clean teardown that leaves no `/dev/shm` segment behind.
 - The Crispy Doom pin in `crispy-doom.lock` is now actually enforced, not just
   recorded.
-- The Python test suite is **103 passed, 5 skipped** (the skips are POSIX‑only
-  tests that do not run on Windows).
+- The Python test suite is green (the only skips are POSIX‑only tests that do
+  not run on Windows).
 - **Raven has publicly shown DOOMed Prism running on physical Raven Prism
   hardware.** On September 9, 2026, Raven Resonance posted on LinkedIn that the
   port runs on the glasses — *"the first natively compiled (non web app) DOOM
@@ -59,7 +65,9 @@ watch DOOM run.
 - A spoken **"pew pew"** as a fire command. This one is not a joke; it is a
   design goal.
 
-None of these exist yet.
+Milestone 3a delivers the input core and the IPC boundary. Voice — spoken
+menu/weapon commands and a spoken **"pew pew"** — ships in Milestone 3b, after
+an offline‑speech‑library licence review.
 
 ## How it works
 
@@ -142,9 +150,11 @@ happened there.
 
 ## Building the patched engine
 
-The app reads frames from a shared‑memory segment that a small, committed patch
-(`patches/crispy-doom-fb-export.diff`) adds to Crispy Doom. Build it with
-`scripts/build_crispy.py`, not a stock checkout.
+The app reads frames from a shared‑memory segment, and drives input over a local
+IPC socket, through two small committed patches to Crispy Doom — the
+frame‑export patch (`patches/crispy-doom-fb-export.diff`) and the IPC‑input patch
+(`patches/crispy-doom-ipc-input.diff`). `scripts/build_crispy.py` applies them as
+a series; build with it, not a stock checkout.
 
 **Prerequisite:** a C toolchain plus SDL2, SDL2_mixer, and SDL2_net development
 libraries.
@@ -246,10 +256,11 @@ must provide any required external software or game data separately and in
 accordance with its applicable license.
 
 The Raven Simulator on Windows is this repository's own development and
-validation environment, and CI additionally builds and runs the patched engine
-natively on aarch64 Linux. Raven has separately compiled this project directly
-from the repository on physical Raven Prism hardware and run it successfully.
-Raven's post and its engineer's confirmation
+validation environment — Milestones 2 and 3a passed their decision gates
+against it — and CI additionally builds and runs the patched engine natively
+on aarch64 Linux. Raven has separately compiled this project directly from the
+repository on physical Raven Prism hardware and run it successfully. Raven's
+post and its engineer's confirmation
 ([`docs/reference/raven-public-post.md`](docs/reference/raven-public-post.md))
 are evidence and public recognition, not affiliation, sponsorship, or a formal
 endorsement.
@@ -258,6 +269,6 @@ endorsement.
 
 Original DOOMed Prism / PewPew Engine code is licensed under GPL-2.0-or-later.
 Crispy Doom is covered by its own upstream license; this repository contains
-only the frame‑export patch and a pinned reference to Crispy Doom, never its
-source. Source distributions include the canonical GPL-2.0 text and deliberately
+only the frame‑export and IPC‑input patches and a pinned reference to Crispy
+Doom, never its source. Source distributions include the canonical GPL-2.0 text and deliberately
 exclude the test suite, whose dependencies are development‑only.

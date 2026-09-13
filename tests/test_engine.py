@@ -29,8 +29,11 @@ def _runtime_config(tmp_path: Path) -> RuntimeConfig:
 
 def test_start_launches_configured_windowed_engine_once_and_returns_its_pid(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Catches a missing launch or an incorrect Crispy Doom command line."""
+    monkeypatch.delenv("DOOMED_PRISM_WARP", raising=False)
+    monkeypatch.delenv("DOOMED_PRISM_SKILL", raising=False)
     config = _runtime_config(tmp_path)
     factory = FakePopenFactory()
 
@@ -48,6 +51,24 @@ def test_start_launches_configured_windowed_engine_once_and_returns_its_pid(
         "-height",
         "480",
     ]
+
+
+def test_start_passes_the_ipc_address_through_the_child_environment(tmp_path: Path) -> None:
+    factory = FakePopenFactory()
+    engine = DoomProcess(_runtime_config(tmp_path), popen_factory=factory)
+    engine.start(ipc_address="127.0.0.1:54321")
+    assert engine.ipc_address == "127.0.0.1:54321"
+    assert factory.processes[0].env["DOOMED_PRISM_IPC_ADDR"] == "127.0.0.1:54321"
+
+
+def test_warp_env_appends_warp_and_skill_argv(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("DOOMED_PRISM_WARP", "1 1")
+    monkeypatch.delenv("DOOMED_PRISM_SKILL", raising=False)
+    factory = FakePopenFactory()
+    DoomProcess(_runtime_config(tmp_path), popen_factory=factory).start()
+    assert factory.processes[0].arguments[-5:] == ["-warp", "1", "1", "-skill", "3"]
 
 
 def test_start_rejects_a_second_launch_while_child_is_running(tmp_path: Path) -> None:
