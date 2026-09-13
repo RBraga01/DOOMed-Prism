@@ -563,13 +563,23 @@ this project has not verified:
 **Architecture.** A new `pewpew.voice` package, mirroring `pewpew.input`'s
 shape:
 
-- `AsrBackend` protocol — `transcribe(wav_bytes: bytes) -> AsrResult`, where
-  `AsrResult` carries `text: str` and `ok: bool` (so DOOMed Prism's own callers
-  get a real failure signal the raw Raven function does not distinguish from
-  silence).
-  - `RavenAiHelperBackend` — the preferred, and only implemented,
-    integration: wraps `OpenAiHelper.transcribe_audio`, owns the
-    key-from-environment, normalizes every failure mode above to `AsrResult(ok=False)`.
+- `AsrBackend` protocol — `transcribe(wav_bytes: bytes) -> AsrResult`. `AsrResult`
+  carries `status: AsrStatus` (`TRANSCRIPT` | `EMPTY_OR_FAILURE` | `LOCAL_ERROR`)
+  and `text: str`. **This tri-state is deliberate, not a convenience wrapper:**
+  `OpenAiHelper.transcribe_audio` itself collapses silence, no speech, a
+  dropped connection, and a real API error into the same `""` return — an
+  adapter cannot manufacture a distinction the upstream call already discarded.
+  `EMPTY_OR_FAILURE` names that exact ambiguity and is never reported as a
+  confirmed failure; `LOCAL_ERROR` is reserved for what DOOMed Prism's own
+  adapter can actually observe *before or around* the Raven call (no API key
+  configured, the Raven Framework import/setup failing, an exception raised
+  outside `transcribe_audio` itself) — never inferred from Raven returning
+  `""`. Docs and tests preserve this distinction explicitly; no code path
+  reinterprets `EMPTY_OR_FAILURE` as `LOCAL_ERROR` or vice versa.
+  - `RavenAiHelperBackend` — the preferred, and only implemented, integration:
+    wraps `OpenAiHelper.transcribe_audio`, owns the key-from-environment,
+    reports `LOCAL_ERROR` only for what it observes directly, and
+    `EMPTY_OR_FAILURE` for every case the wrapped call already collapsed.
   - `FakeAsrBackend` — scripted responses for CI and simulator tests; no
     network, no Raven Framework import required to run the suite (matching
     how `pewpew` already keeps Raven and Crispy out of CI via fakes).
@@ -581,13 +591,17 @@ shape:
   `Microphone` (Simulator today; real Prism once entitled) plus a fake for
   tests.
 - `CommandGrammar` — the closed phrase list unchanged from §2's "In scope"
-  list, plus a normalize-and-match function turning `AsrBackend`'s free text
-  into one `Action` or nothing (the API exposes no grammar constraint, so this
-  matching is entirely DOOMed Prism's own).
+  list, plus a normalize-and-match function turning a `TRANSCRIPT` result's
+  free text into one `Action` or nothing (the API exposes no grammar
+  constraint, so this matching is entirely DOOMed Prism's own).
+  `EMPTY_OR_FAILURE` and `LOCAL_ERROR` both match nothing — silently, for
+  `EMPTY_OR_FAILURE` (it may just be silence), and its own way for
+  `LOCAL_ERROR` per the failure-isolation note below.
 - **`SpokenFireSource` (R7) stays independent of the general command-ASR
   path** — its own call site, its own debounce/cooldown/confidence handling,
-  not a special case inside `CommandGrammar` matching. Its 3b implementation
-  may reuse `RavenAiHelperBackend` + a "pew pew" phrase match to unblock
+  not a special case inside `CommandGrammar` matching, and the same
+  `TRANSCRIPT`-only matching discipline. Its 3b implementation may reuse
+  `RavenAiHelperBackend` + a "pew pew" phrase match to unblock
   end-to-end testing now, **or** a dedicated low-latency detector, **without
   changing the protocol or any other component** — the fire call site does not
   know or care which. A custom-trained openWakeWord model (Apache-2.0 tooling,
