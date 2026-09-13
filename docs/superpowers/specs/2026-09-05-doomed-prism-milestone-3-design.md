@@ -514,6 +514,124 @@ turn is proportional"). One gaze-independent C test covers (a). Direction
 (up/down/diagonal) still comes from the vector — only the walk speed loses its
 ramp.
 
+### R15 — Milestone 3b's ASR is the Raven Framework's AI Helper, backend-abstracted; the fire detector is deferred (amendment, 2026-09-13)
+
+Supersedes: R1's "offline voice" framing and the §9 licence-review conclusion.
+Amends: the "In scope (3b, per R15)" list (§2) and §18's 3b exit criteria.
+
+**What changed.** The independent licence review (openWakeWord, Porcupine,
+Vosk, PocketSphinx, whisper.cpp, Mycroft Precise, Coqui STT — recorded in
+`docs/reference/`) was completed as planned, but Raven separately confirmed
+that Prism already has an ASR/TTS integration point — `OpenAiHelper` in
+`raven_framework.helpers` — and that Raven's own planned local, on-device
+models will land behind that *same* function/interface. Building against that
+existing public interface now, rather than integrating a third-party engine
+DOOMed Prism would have to maintain itself, is both less work and forward-
+compatible with Raven's own roadmap.
+
+**Inspection findings (`raven_framework.helpers.open_ai_helper`,
+`raven_framework.peripherals.microphone`; read locally, not reproduced or
+committed — the file carries Raven Resonance's own proprietary header).**
+Recorded here plainly, per the discipline of never overclaiming a capability
+this project has not verified:
+
+- `OpenAiHelper` is a plain class exported from `raven_framework.helpers`, not
+  wired into the `RavenApp` base class — there is no shared, Raven-managed
+  instance. A calling app imports the class and instantiates its own,
+  supplying its own key.
+- `transcribe_audio(wav_bytes, model="whisper-1", ...) -> str` is a **whole-
+  clip, synchronous, cloud** transcription call (a real network round trip to
+  OpenAI's API) — not streaming, no partial results.
+- It returns the transcribed text, or `""` on **any** failure — silence, no
+  speech, a dropped connection, and a real API error are all indistinguishable
+  at this interface. No confidence score, no timestamps, no vocabulary/grammar
+  bias parameter.
+- It needs its own OpenAI API key, supplied by the calling app (an env var,
+  never committed — the existing `DOOMED_PRISM_*` pattern).
+- `Microphone` is dual-mode: real Prism hardware goes through a
+  `sensorlib_client` that **requires Raven `app_id`/`app_key` app
+  entitlement** — the same hardware-access gate M3a hit for real gaze/blink.
+  The Simulator/desktop fallback (Qt's `QAudioSource`) has no such gate and
+  **can already be used for development today**. Recording is manual
+  start/stop (no built-in voice-activity detection); a `levelChanged(float)`
+  signal gives a live peak level.
+- **The current backend is cloud, today.** Raven's stated intent is that
+  local, on-device models land behind the same function signature later; that
+  is Raven's roadmap, not something this project has verified from code, and
+  it is not claimed as offline/on-device capability until it is.
+
+**Architecture.** A new `pewpew.voice` package, mirroring `pewpew.input`'s
+shape:
+
+- `AsrBackend` protocol — `transcribe(wav_bytes: bytes) -> AsrResult`, where
+  `AsrResult` carries `text: str` and `ok: bool` (so DOOMed Prism's own callers
+  get a real failure signal the raw Raven function does not distinguish from
+  silence).
+  - `RavenAiHelperBackend` — the preferred, and only implemented,
+    integration: wraps `OpenAiHelper.transcribe_audio`, owns the
+    key-from-environment, normalizes every failure mode above to `AsrResult(ok=False)`.
+  - `FakeAsrBackend` — scripted responses for CI and simulator tests; no
+    network, no Raven Framework import required to run the suite (matching
+    how `pewpew` already keeps Raven and Crispy out of CI via fakes).
+  - `PocketSphinxBackend` — the independently-researched fallback stays
+    **documented, not implemented**, unless a real gate result shows Raven's
+    ASR is unavailable, unsuitable, or too slow for the command grammar.
+- `AudioSource` protocol (`start()`, `stop() -> bytes`, mirroring the shape
+  `agent_hud`'s own `recorder` already uses) — `RavenMicrophoneSource` wraps
+  `Microphone` (Simulator today; real Prism once entitled) plus a fake for
+  tests.
+- `CommandGrammar` — the closed phrase list unchanged from §2's "In scope"
+  list, plus a normalize-and-match function turning `AsrBackend`'s free text
+  into one `Action` or nothing (the API exposes no grammar constraint, so this
+  matching is entirely DOOMed Prism's own).
+- **`SpokenFireSource` (R7) stays independent of the general command-ASR
+  path** — its own call site, its own debounce/cooldown/confidence handling,
+  not a special case inside `CommandGrammar` matching. Its 3b implementation
+  may reuse `RavenAiHelperBackend` + a "pew pew" phrase match to unblock
+  end-to-end testing now, **or** a dedicated low-latency detector, **without
+  changing the protocol or any other component** — the fire call site does not
+  know or care which. A custom-trained openWakeWord model (Apache-2.0 tooling,
+  trained locally, never the CC-BY-NC-SA pre-trained community models) remains
+  a **candidate** dedicated detector, not the selected implementation. Which
+  one 3b ships with is decided by the hardware/performance gate below —
+  measured latency and false-positive/false-negative rate — not by
+  architectural preference today.
+- `VoiceWorker` — owns the mic, the backend, the grammar, and both debounce
+  paths; runs isolated so a crash disables voice only and preserves
+  click/blink/Enter (§8's existing crash-isolation shape). Feeds `Action`s
+  into the unmodified `ActionRouter` — no change to `pipeline.py`'s consumer
+  side.
+
+**Two validation stages, not one.** 3b's decision gate splits cleanly along
+what the Simulator can and cannot prove:
+
+- **3b software gate — closeable now**, with fakes and the Simulator
+  microphone: the audio abstraction, the `RavenAiHelperBackend` adapter,
+  command normalization/matching, failure isolation, debounce/cooldown,
+  `ActionRouter` integration, and deterministic tests for all of it.
+- **3b hardware/performance gate — not closeable yet**, and not claimed as
+  closed by the software gate passing: real Prism microphone access (needs
+  Raven app entitlement), measured Raven ASR latency and command accuracy on
+  real hardware, "pew pew" latency and false-positive/false-negative rate,
+  and CPU/RAM/thermal impact if a dedicated fire detector proves necessary.
+  This gate is re-run whenever Raven ships its local-model backend behind the
+  same interface, since the latency characteristics — and therefore whether a
+  dedicated fire detector is needed at all — may change substantially without
+  any change to DOOMed Prism's own integration.
+
+**§9 licence-review conclusion (revised):** Raven Framework ASR (`OpenAiHelper`)
+is the preferred integration path. PocketSphinx is the independently
+researched fallback, documented and ready, not implemented. A dedicated
+low-latency "pew pew" detector remains an architectural option and is
+selected only if measurement shows Raven's ASR is unsuitable for fire.
+
+**Cost if wrong.** If Raven's ASR proves unsuitable even for the command
+grammar (not just fire), `AsrBackend` is the seam: implement
+`PocketSphinxBackend` from the already-completed licence review and swap it
+in — no change to `CommandGrammar`, `VoiceWorker`, or `ActionRouter`. If Raven
+ships local models behind a different function shape than promised, only
+`RavenAiHelperBackend` changes.
+
 ---
 
 ## 1. Problem
@@ -584,28 +702,41 @@ inputs with no stuck key and no orphan process?**
 - A README refresh (License names the two patches; Current status / What comes
   next updated; one line that voice is 3b).
 
-### In scope (3b, gated behind the §9 licence review)
+### In scope (3b, per R15)
 
 - **First:** extend `check_publication_safety.py` (audio + acoustic-model file
   suffixes into `FORBIDDEN_SUFFIXES`, matching `tests/test_publication_safety.py`
   cases) and `.gitignore` (`models/`, `calibration/`, `*.wav *.flac *.ogg *.mp3
   *.opus *.raw *.pcm`, `*.tflite *.onnx *.pt *.pb *.pbmm *.scorer *.gguf`) —
   before any 3b audio/model code lands.
-- The §9 offline-speech-library licence review, recorded as committed text; the
-  library and any model stay out of git, fetched or supplied like the IWAD.
-- The closed offline English command grammar (§6, token `pew pew` per R13):
+- **(R15)** `pewpew.voice`: the `AsrBackend` protocol, `RavenAiHelperBackend`
+  (the only implemented backend — wraps the Raven Framework's `OpenAiHelper`,
+  cloud today per R15's inspection findings), and `FakeAsrBackend` for tests.
+  `PocketSphinxBackend` stays documented (the completed licence review) and
+  unimplemented unless the hardware gate requires it.
+- The closed English command grammar (§6, token `pew pew` per R13):
   `open`/`use`, `next weapon`, `weapon one`–`weapon seven`, `map`,
   `pause`/`resume`, `save game`/`load game` (confirm), `exit Doom` (confirm),
-  plus `MENU_*` navigation.
-- A real acoustic "pew pew" keyword detector behind 3a's `SpokenFireSource`
-  protocol, calibrated with user samples that are never committed.
-- A desktop audio-capture adapter behind an `AudioSource` protocol; the Raven
-  microphone topology is a §12 hardware-phase item and stays stubbed.
+  plus `MENU_*` navigation — matched from `AsrBackend` free text, since the
+  Raven ASR function exposes no grammar constraint of its own.
+- **(R15)** `SpokenFireSource` (3a's existing protocol) implemented via
+  `RavenAiHelperBackend` + a "pew pew" phrase match, to unblock end-to-end
+  testing now. The call site stays independent of `CommandGrammar` so a
+  dedicated low-latency detector (a custom-trained openWakeWord model is a
+  *candidate*, not selected) can replace it later without touching anything
+  else — decided by the hardware/performance gate, not architectural
+  preference.
+- **(R15)** `AudioSource` protocol; `RavenMicrophoneSource` wraps the Raven
+  Framework's `Microphone` — usable today via its Simulator/desktop Qt path,
+  with the real Prism microphone gated on Raven app entitlement (a §12
+  hardware-phase dependency, same bucket as real gaze/blink).
 - The R6 "later" discrete `code`s appended to `crispy-doom-ipc-input.diff`.
 - A crashed voice worker disables voice and preserves click/blink and Enter (§8).
-- `docs/validation/milestone-3b-checklist.md` / `milestone-3b-result.md`, whose
-  objective checks include "no model or audio file committed" and both
-  publication-safety scan invocations.
+- `docs/validation/milestone-3b-checklist.md` / `milestone-3b-result.md`, split
+  per R15 into a software gate (closeable now, fakes + Simulator) and a
+  hardware/performance gate (needs real Prism access — latency, accuracy,
+  "pew pew" FP/FN, CPU/RAM/thermal). Objective checks include "no model or
+  audio file committed" and both publication-safety scan invocations.
 
 ### Out of scope
 
@@ -1646,8 +1777,18 @@ or FAIL. A FAIL is a valid engineering result: it keeps the §4 IPC boundary and
 reopens only the event-injection method; "PASS (degraded forward)" closes 3a
 with a follow-up scoped to the `forwardmove` mechanism only.
 
-Milestone 3b is complete when `check_publication_safety.py` and `.gitignore`
-cover audio/model files, the §9 licence review is recorded as a pass, the
-offline grammar and the real spoken-fire detector work end-to-end with fakes in
-CI and on the Windows gate, no model or audio file is tracked, and
-`milestone-3b-result.md` records a reproducible PASS or FAIL.
+Milestone 3b's **software gate** (R15) is complete when
+`check_publication_safety.py` and `.gitignore` cover audio/model files, the §9
+licence review is recorded as committed text (Raven Framework ASR preferred,
+PocketSphinx the independently-researched fallback), the command grammar and
+the `SpokenFireSource` "pew pew" path work end-to-end against
+`RavenAiHelperBackend` with fakes in CI and against the Simulator microphone
+on the Windows gate, no model or audio file is tracked, and
+`milestone-3b-result.md` records a reproducible PASS or FAIL for that scope.
+
+Milestone 3b's **hardware/performance gate** (R15) is a separate, later
+result on real Prism hardware — Raven ASR latency and command accuracy,
+"pew pew" false-positive/false-negative rate, and CPU/RAM/thermal impact if a
+dedicated fire detector proves necessary — not claimed as closed by the
+software gate passing, and re-run whenever Raven ships its local-model ASR
+backend.
