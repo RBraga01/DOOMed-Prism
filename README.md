@@ -15,7 +15,7 @@ not a native SDL window.*
 
 ## Current status
 
-**Milestone 3a — input & IPC:** implemented on `feature/doomed-prism-m3`.
+**Milestone 3a — input & IPC: complete**, merged to `main` (tag `v0.3.0-m3a`).
 Gaze drives a **radial analog stick** — proportional turn *and* forward/back
 from one gaze vector — over a local IPC socket to the patched engine. The
 Windows / Raven Simulator decision gate **passed** on 2026-09-08: IPC-only input drives the
@@ -56,16 +56,20 @@ an optical preview, not the device.
 
 ## What comes next
 
-Milestone 3 is about input — because right now the only thing you can do is
-watch DOOM run.
+Milestone 3 is about **input** — DOOM here is already playable in the Raven
+Simulator, not just watchable.
 
-- **Gaze** to steer and turn.
-- **Double blink** as a deliberate action — probably `FIRE`.
-- **Voice** for menus and weapon switching.
+- **Gaze** to steer and turn — **done (Milestone 3a)**. A radial analog
+  joystick: a neutral dead-zone at centre, with turn *and* forward/back rising
+  as the gaze moves toward the edge, all from one gaze vector over the IPC
+  boundary. Tested and gate-passed in the Raven Simulator on Windows; on-glasses
+  interaction validation remains open.
+- **Double blink** as a deliberate action — probably `FIRE`. Not yet built.
+- **Voice** for menus and weapon switching. Not yet built.
 - A spoken **"pew pew"** as a fire command. This one is not a joke; it is a
   design goal.
 
-Milestone 3a delivers the input core and the IPC boundary. Voice — spoken
+Milestone 3a delivered the input core and the IPC boundary. Voice — spoken
 menu/weapon commands and a spoken **"pew pew"** — ships in Milestone 3b, after
 an offline‑speech‑library licence review.
 
