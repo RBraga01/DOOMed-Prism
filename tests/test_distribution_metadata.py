@@ -121,33 +121,52 @@ def test_c_patch_constants_match_the_python_enums() -> None:
 def test_every_grammar_action_has_a_c_dispatch_arm() -> None:
     """The exact class of bug the final whole-branch review's Critical 1 and
     2 findings were: a grammar phrase whose Action reaches no C-side
-    dispatch arm (or the wrong one for DOOM's input-consumption model)
-    matches successfully and then silently does nothing end-to-end. This
-    scans ipc_apply() -- the one function that decides, for both MT_PULSE
-    and MT_DISCRETE, which AC_* codes the engine actually consumes -- and
-    asserts every Action that grammar.py's _PHRASES can produce is reachable
-    through one message type or the other. It does not check *which* type is
-    correct for a given key's consumption model (pulse vs discrete) -- that
-    is the runtime engine verification's job -- only that the code isn't
-    dropped on the floor entirely.
+    dispatch arm -- or reaches one under the wrong message type for DOOM's
+    input-consumption model -- matches successfully and then silently does
+    nothing end-to-end (Critical 1: AC_USE dispatched as MT_DISCRETE, which
+    ipc_apply() never handled for that code; Critical 2: AC_WEAPON_1..7 as an
+    instantaneous MT_DISCRETE keydown+keyup pair, erased by DOOM's own
+    gamekeydown[] polling before G_BuildTiccmd ever read it). A bare
+    "does the code appear anywhere in ipc_apply()" check does not catch
+    either bug -- AC_USE and the weapon codes were always textually present,
+    just under the wrong case. This test instead scans the MT_PULSE and
+    MT_DISCRETE case bodies separately and asserts every state-polled Action
+    (grammar._PULSE_ACTIONS -- the ones that need MT_PULSE's hold mechanism,
+    per the fix brief's Critical 1/2 root cause) is reachable specifically
+    within the MT_PULSE case, not merely somewhere in the function.
     """
     import re
 
     from pewpew.voice import grammar
 
     diff = (ROOT / "patches" / "crispy-doom-ipc-input.diff").read_text(encoding="utf-8")
-    # ipc_apply()'s body contains both the MT_PULSE switch(code) and the
-    # MT_DISCRETE if-chain; every line in this whole-new-file diff is
-    # "+"-prefixed, and the function's own closing brace is the first
-    # unindented "+}" after its signature (inner block closes are indented,
-    # e.g. "+    }", so they don't match "+\}").
-    match = re.search(r"\+static void ipc_apply\(.*?\n\+\}\n", diff, re.DOTALL)
-    assert match, "could not locate ipc_apply() in the IPC patch"
-    reachable = set(re.findall(r"AC_(\w+)", match.group(0)))
+    # ipc_apply()'s body contains, in order, the MT_PULSE switch(code), the
+    # MT_DISCRETE if-chain, then MT_BYE -- every line in this whole-new-file
+    # diff is "+"-prefixed, so "case MT_DISCRETE:"/"case MT_BYE:" delimit the
+    # MT_PULSE case's own body without needing to track brace depth.
+    pulse_match = re.search(
+        r"\+\s*case MT_PULSE:\n(.*?)\n\+\s*case MT_DISCRETE:", diff, re.DOTALL
+    )
+    discrete_match = re.search(
+        r"\+\s*case MT_DISCRETE:\n(.*?)\n\+\s*case MT_BYE:", diff, re.DOTALL
+    )
+    assert pulse_match and discrete_match, "could not locate ipc_apply()'s case bodies in the IPC patch"
+    pulse_reachable = set(re.findall(r"AC_(\w+)", pulse_match.group(1)))
+    discrete_reachable = set(re.findall(r"AC_(\w+)", discrete_match.group(1)))
+    reachable = pulse_reachable | discrete_reachable
 
     phrase_action_names = {action.name for action in grammar._PHRASES.values()}
     unreachable = phrase_action_names - reachable
     assert not unreachable, (
         "grammar._PHRASES names Action(s) with no C-side dispatch arm in "
         f"ipc_apply() (MT_PULSE or MT_DISCRETE): {sorted(unreachable)}"
+    )
+
+    pulse_action_names = {action.name for action in grammar._PULSE_ACTIONS}
+    wrongly_typed = pulse_action_names - pulse_reachable
+    assert not wrongly_typed, (
+        "grammar._PULSE_ACTIONS names Action(s) reachable only outside "
+        "MT_PULSE -- an instantaneous MT_DISCRETE keydown+keyup pair for a "
+        "state-polled key is erased by DOOM's gamekeydown[] polling before "
+        f"G_BuildTiccmd reads it (Critical 2's exact bug): {sorted(wrongly_typed)}"
     )
