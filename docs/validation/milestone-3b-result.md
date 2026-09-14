@@ -13,8 +13,8 @@ gate" section for exactly what remains open.
   Prism can claim as implemented — offline operation is not claimed by this
   project today.
 - Fallback (not implemented): PocketSphinx — independently researched,
-  documented in `docs/reference/`, ready if the hardware gate ever shows
-  Raven's ASR unsuitable.
+  documented in `docs/superpowers/specs/2026-09-05-doomed-prism-milestone-3-design.md`
+  (ruling R15), ready if the hardware gate ever shows Raven's ASR unsuitable.
 - "pew pew" fire detector: `RavenSpokenFireSource`, backed by the same
   `OpenAiHelper` path. A dedicated low-latency detector (openWakeWord is a
   *candidate*, not selected) remains an option, decided only by the
