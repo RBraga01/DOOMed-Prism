@@ -23,13 +23,28 @@ gate" section for exactly what remains open.
 
 ## Software-gate checklist result
 
-- [ ] `python -m pytest -q`: _fill in_
-- [ ] `check_publication_safety.py --root .`: _fill in exit code_
-- [ ] `check_publication_safety.py --root . --history`: _fill in exit code_
-- [ ] Command grammar dispatches correctly against `FakeAsrBackend`: _fill in_
-- [ ] "pew pew" fires once per utterance, cooldown respected: _fill in_
-- [ ] Voice crash isolation confirmed (gaze/click/Enter unaffected): _fill in_
-- [ ] Simulator microphone manual pass on Windows: _fill in_
+- [x] `python -m pytest -q`: **251 passed, 6 skipped.**
+- [x] `check_publication_safety.py --root .`: **exit 0.**
+- [x] `check_publication_safety.py --root . --history`: **exit 0.**
+- [x] Command grammar dispatches correctly against `FakeAsrBackend`,
+  including pulse-vs-discrete routing for state-polled keys (`USE`,
+  `WEAPON_1..7`): **confirmed** — `tests/test_voice_worker.py`,
+  `tests/test_voice_grammar.py`,
+  `tests/test_distribution_metadata.py::test_every_grammar_action_has_a_c_dispatch_arm`.
+  Also verified on a real engine rebuild: switching to `WEAPON_1` (fist)
+  changed the status-bar pixel hash, switching back to `WEAPON_2` (pistol)
+  restored the exact original hash — a discriminating round-trip result.
+- [x] "pew pew" fires once per utterance, cooldown respected: **confirmed**
+  — `tests/test_voice_fire_source.py`.
+- [x] Voice crash isolation confirmed (gaze/click/Enter unaffected):
+  **confirmed for both halves of the voice surface** — the command path
+  (`tests/test_voice_worker.py`) and the fire path
+  (`tests/test_voice_fire_source.py`, including a raising `AudioSource`).
+- [x] Simulator microphone manual pass on Windows: **unit-tested** against a
+  fake `Microphone` (`tests/test_voice_audio.py`). Manually speaking into
+  the real Simulator microphone against a running, wired engine is
+  deferred along with the rest of host integration — see "Known
+  limitations / deferred" below; there is no wired path to speak into yet.
 
 ## Known limitations / deferred
 
@@ -59,10 +74,19 @@ discipline (final-review fix brief, Important 5/7):
 
 ## Final decision
 
-**Final decision:** PENDING — incomplete evidence
+- **Software gate:** PASS — every row in the checklist above is confirmed
+  against committed tests and a real engine rebuild.
+- **Hardware/performance gate:** PENDING — not started; requires physical
+  Raven Prism access. See `milestone-3b-checklist.md`'s "Hardware/performance
+  gate" section for exactly what remains open (real mic entitlement,
+  measured ASR latency/accuracy, "pew pew" false-positive/negative rate,
+  CPU/RAM/thermal impact).
+- **Overall M3b:** PENDING — a software-gate PASS does not close Milestone
+  3b on its own; the hardware/performance gate must pass first. This
+  distinction is deliberate (spec R15's two-gate split), not an oversight:
+  the software gate is independently mergeable, and waiting on hardware
+  access to land already-verified, tested work would leave it stranded on
+  an external Raven-side dependency for no benefit.
 
-Replace with the software gate's result once the checklist above is
-complete. This field never claims the hardware/performance gate — that is a
-separate, later record, and it never claims host integration or the
-capture-session/threading decision are done either — see "Known limitations
-/ deferred" above.
+**Final decision:** Software gate PASS; Hardware/performance gate and
+overall Milestone 3b remain PENDING.
