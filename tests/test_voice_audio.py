@@ -48,3 +48,24 @@ def test_raven_microphone_source_is_lazy_and_stop_before_start_is_silent() -> No
 
     source = RavenMicrophoneSource(microphone_factory=factory)
     assert source.stop() == b""
+
+
+def test_a_second_stop_without_an_intervening_start_is_silent() -> None:
+    # Minor 4: "is recording" is now tracked explicitly rather than inferred
+    # from `_microphone is None`, so a second stop() after a start/stop pair
+    # returns b"" instead of calling stop_recording() again on an
+    # already-stopped device.
+    built: list[_FakeMicrophone] = []
+
+    def factory(app_id: str, app_key: str) -> _FakeMicrophone:
+        mic = _FakeMicrophone()
+        built.append(mic)
+        return mic
+
+    source = RavenMicrophoneSource(microphone_factory=factory)
+    source.start()
+    first = source.stop()
+    second = source.stop()
+
+    assert first == b"wav-bytes"
+    assert second == b""

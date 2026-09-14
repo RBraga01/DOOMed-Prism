@@ -45,6 +45,12 @@ class RavenMicrophoneSource:
         self._app_key = app_key
         self._microphone_factory = microphone_factory
         self._microphone: Any = None
+        # Tracked explicitly rather than inferred from `self._microphone is
+        # None` -- that would only protect the never-started case. Without
+        # this flag, a second stop() with no intervening start() would call
+        # stop_recording() again on an already-stopped device instead of
+        # returning b"".
+        self._is_recording = False
 
     def _ensure_microphone(self) -> Any:
         if self._microphone is None:
@@ -53,8 +59,10 @@ class RavenMicrophoneSource:
 
     def start(self) -> None:
         self._ensure_microphone().start_recording()
+        self._is_recording = True
 
     def stop(self) -> bytes:
-        if self._microphone is None:
+        if not self._is_recording:
             return b""
+        self._is_recording = False
         return self._microphone.stop_recording()

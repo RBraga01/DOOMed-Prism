@@ -57,6 +57,49 @@ def test_repeated_pew_pew_within_the_cooldown_only_fires_once() -> None:
     assert source.spoken_fire_edge() is False
 
 
+def test_a_crash_in_the_audio_source_disables_fire_without_raising() -> None:
+    # Important 4: RavenSpokenFireSource had no crash isolation -- unlike
+    # VoiceWorker -- and .start() is the first call and the most likely
+    # real-world failure point (e.g. RavenMicrophoneSource without Raven app
+    # entitlement). FakeAudioSource never raises, so this is a raising
+    # AudioSource, not just a raising backend.
+    class _RaisingAudioSource:
+        def start(self) -> None:
+            raise RuntimeError("boom")
+
+        def stop(self) -> bytes:
+            raise AssertionError("stop() should not be reached")
+
+    backend = FakeAsrBackend([AsrResult(AsrStatus.TRANSCRIPT, "pew pew")])
+    source = RavenSpokenFireSource(backend, _RaisingAudioSource())
+
+    source.record_and_check(0.0)  # must not raise
+
+    assert source.disabled is True
+    assert source.spoken_fire_edge() is False
+
+
+def test_a_disabled_fire_source_does_not_report_a_stale_edge() -> None:
+    # A crash after `self._edge` was already set to True by an earlier,
+    # successful cycle must not leave spoken_fire_edge() reporting True once
+    # disabled.
+    class _RaisingBackend:
+        def transcribe(self, wav_bytes: bytes):
+            raise RuntimeError("boom")
+
+    backend = FakeAsrBackend([AsrResult(AsrStatus.TRANSCRIPT, "pew pew")])
+    source = RavenSpokenFireSource(backend, FakeAudioSource(b"clip"))
+    source.record_and_check(0.0)
+    assert source.spoken_fire_edge() is True  # sanity: fired normally first
+
+    source._edge = True  # simulate a stale edge set before a later crash
+    source._backend = _RaisingBackend()
+    source.record_and_check(1.0)  # must not raise
+
+    assert source.disabled is True
+    assert source.spoken_fire_edge() is False
+
+
 def test_pew_pew_fires_again_after_the_cooldown_elapses() -> None:
     backend = FakeAsrBackend([
         AsrResult(AsrStatus.TRANSCRIPT, "pew pew"),
