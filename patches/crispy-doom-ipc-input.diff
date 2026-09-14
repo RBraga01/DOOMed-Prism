@@ -100,7 +100,7 @@ new file mode 100644
 index 00000000..6a774780
 --- /dev/null
 +++ b/src/i_ipc_input.c
-@@ -0,0 +1,361 @@
+@@ -0,0 +1,394 @@
 +//
 +// Copyright(C) 2026 DOOMed Prism contributors
 +// GPL-2.0-or-later — see i_ipc_input.h.
@@ -176,6 +176,17 @@ index 00000000..6a774780
 +#define AC_FIRE 10
 +#define AC_USE 11
 +#define AC_PAUSE 20
++#define AC_WEAPON_1 30
++#define AC_WEAPON_2 31
++#define AC_WEAPON_3 32
++#define AC_WEAPON_4 33
++#define AC_WEAPON_5 34
++#define AC_WEAPON_6 35
++#define AC_WEAPON_7 36
++#define AC_MENU_CONFIRM 37
++#define AC_MENU_CANCEL 38
++#define AC_MENU_UP 39
++#define AC_MENU_DOWN 40
 +
 +static int ipc_enabled = 0;
 +static ipc_sock_t ipc_sock = IPC_INVALID;
@@ -375,6 +386,28 @@ index 00000000..6a774780
 +        case MT_DISCRETE:
 +            if (code == AC_PAUSE)
 +            { ipc_post_key(ev_keydown, key_pause); ipc_post_key(ev_keyup, key_pause); }
++            else if (code == AC_WEAPON_1)
++            { ipc_post_key(ev_keydown, key_weapon1); ipc_post_key(ev_keyup, key_weapon1); }
++            else if (code == AC_WEAPON_2)
++            { ipc_post_key(ev_keydown, key_weapon2); ipc_post_key(ev_keyup, key_weapon2); }
++            else if (code == AC_WEAPON_3)
++            { ipc_post_key(ev_keydown, key_weapon3); ipc_post_key(ev_keyup, key_weapon3); }
++            else if (code == AC_WEAPON_4)
++            { ipc_post_key(ev_keydown, key_weapon4); ipc_post_key(ev_keyup, key_weapon4); }
++            else if (code == AC_WEAPON_5)
++            { ipc_post_key(ev_keydown, key_weapon5); ipc_post_key(ev_keyup, key_weapon5); }
++            else if (code == AC_WEAPON_6)
++            { ipc_post_key(ev_keydown, key_weapon6); ipc_post_key(ev_keyup, key_weapon6); }
++            else if (code == AC_WEAPON_7)
++            { ipc_post_key(ev_keydown, key_weapon7); ipc_post_key(ev_keyup, key_weapon7); }
++            else if (code == AC_MENU_CONFIRM)
++            { ipc_post_key(ev_keydown, key_menu_forward); ipc_post_key(ev_keyup, key_menu_forward); }
++            else if (code == AC_MENU_CANCEL)
++            { ipc_post_key(ev_keydown, key_menu_back); ipc_post_key(ev_keyup, key_menu_back); }
++            else if (code == AC_MENU_UP)
++            { ipc_post_key(ev_keydown, key_menu_up); ipc_post_key(ev_keyup, key_menu_up); }
++            else if (code == AC_MENU_DOWN)
++            { ipc_post_key(ev_keydown, key_menu_down); ipc_post_key(ev_keyup, key_menu_down); }
 +            break;
 +        case MT_BYE:
 +            ipc_disable();

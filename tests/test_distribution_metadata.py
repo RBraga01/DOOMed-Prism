@@ -45,7 +45,11 @@ def test_ipc_patch_touches_only_the_allowed_engine_files() -> None:
     }
     assert touched and touched <= allowed, f"unexpected files: {touched - allowed}"
     added = sum(1 for ln in diff.splitlines() if ln.startswith("+") and not ln.startswith("+++"))
-    assert added <= 420, f"IPC patch added {added} lines (> 420 ceiling)"
+    # 420 (M3a) -> 453 (M3b task 6): 11 new discrete WEAPON_1..7 /
+    # MENU_CONFIRM/CANCEL/UP/DOWN codes, each one AC_PAUSE's existing
+    # keydown/keyup-pair mechanism repeated for a different key -- +33 lines,
+    # net-added 452. Ceiling kept at actual + 1, same margin M3a used.
+    assert added <= 453, f"IPC patch added {added} lines (> 453 ceiling)"
 
 
 def test_c_patch_constants_match_the_python_enums() -> None:
@@ -63,6 +67,17 @@ def test_c_patch_constants_match_the_python_enums() -> None:
     assert defs["AC_FIRE"] == Action.FIRE
     assert defs["AC_USE"] == Action.USE
     assert defs["AC_PAUSE"] == Action.PAUSE
+    assert defs["AC_WEAPON_1"] == Action.WEAPON_1
+    assert defs["AC_WEAPON_2"] == Action.WEAPON_2
+    assert defs["AC_WEAPON_3"] == Action.WEAPON_3
+    assert defs["AC_WEAPON_4"] == Action.WEAPON_4
+    assert defs["AC_WEAPON_5"] == Action.WEAPON_5
+    assert defs["AC_WEAPON_6"] == Action.WEAPON_6
+    assert defs["AC_WEAPON_7"] == Action.WEAPON_7
+    assert defs["AC_MENU_CONFIRM"] == Action.MENU_CONFIRM
+    assert defs["AC_MENU_CANCEL"] == Action.MENU_CANCEL
+    assert defs["AC_MENU_UP"] == Action.MENU_UP
+    assert defs["AC_MENU_DOWN"] == Action.MENU_DOWN
     assert defs["MT_HELLO"] == MessageType.HELLO
     assert defs["MT_ACTION"] == MessageType.ACTION
     assert defs["MT_PULSE"] == MessageType.PULSE
