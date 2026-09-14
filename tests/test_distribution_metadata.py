@@ -45,11 +45,18 @@ def test_ipc_patch_touches_only_the_allowed_engine_files() -> None:
     }
     assert touched and touched <= allowed, f"unexpected files: {touched - allowed}"
     added = sum(1 for ln in diff.splitlines() if ln.startswith("+") and not ln.startswith("+++"))
-    # 420 (M3a) -> 453 (M3b task 6): 11 new discrete WEAPON_1..7 /
-    # MENU_CONFIRM/CANCEL/UP/DOWN codes, each one AC_PAUSE's existing
-    # keydown/keyup-pair mechanism repeated for a different key -- +33 lines,
-    # net-added 452. Ceiling kept at actual + 1, same margin M3a used.
-    assert added <= 453, f"IPC patch added {added} lines (> 453 ceiling)"
+    # 420 (M3a) -> 453 (M3b task 6) -> 461 (M3b final-review fix pass, Critical 2):
+    # WEAPON_1..7 were originally wired as MT_DISCRETE keydown/keyup pairs (task
+    # 6), which the final whole-branch review found DOOM's own gamekeydown[]
+    # polling erases before G_BuildTiccmd ever reads them -- the same trap
+    # key_fire/key_use already avoid via MT_PULSE's pulse_key[]/pulse_tics[]
+    # hold. The fix moves the 7 weapon codes onto that same MT_PULSE path (a
+    # `switch (code)` replacing the old two-way ternary) and removes their 7
+    # MT_DISCRETE arms (net -14 lines there), and adds a comment above
+    # ipc_apply() documenting DOOM's two input-consumption models so the next
+    # code isn't wired the same wrong way. Net effect: 452 -> 460 actual added
+    # lines. Ceiling kept at actual + 1, same margin M3a and task 6 used.
+    assert added <= 461, f"IPC patch added {added} lines (> 461 ceiling)"
 
 
 def test_c_patch_constants_match_the_python_enums() -> None:
@@ -109,3 +116,38 @@ def test_c_patch_constants_match_the_python_enums() -> None:
     # The documented forwardmove mapping contract the C side must implement.
     assert "10000" in diff and "MOVE_MAX_FORWARDMOVE" in diff
     assert re.search(r"IPC_Input_ForwardMove", diff)  # the accessor g_game.c folds
+
+
+def test_every_grammar_action_has_a_c_dispatch_arm() -> None:
+    """The exact class of bug the final whole-branch review's Critical 1 and
+    2 findings were: a grammar phrase whose Action reaches no C-side
+    dispatch arm (or the wrong one for DOOM's input-consumption model)
+    matches successfully and then silently does nothing end-to-end. This
+    scans ipc_apply() -- the one function that decides, for both MT_PULSE
+    and MT_DISCRETE, which AC_* codes the engine actually consumes -- and
+    asserts every Action that grammar.py's _PHRASES can produce is reachable
+    through one message type or the other. It does not check *which* type is
+    correct for a given key's consumption model (pulse vs discrete) -- that
+    is the runtime engine verification's job -- only that the code isn't
+    dropped on the floor entirely.
+    """
+    import re
+
+    from pewpew.voice import grammar
+
+    diff = (ROOT / "patches" / "crispy-doom-ipc-input.diff").read_text(encoding="utf-8")
+    # ipc_apply()'s body contains both the MT_PULSE switch(code) and the
+    # MT_DISCRETE if-chain; every line in this whole-new-file diff is
+    # "+"-prefixed, and the function's own closing brace is the first
+    # unindented "+}" after its signature (inner block closes are indented,
+    # e.g. "+    }", so they don't match "+\}").
+    match = re.search(r"\+static void ipc_apply\(.*?\n\+\}\n", diff, re.DOTALL)
+    assert match, "could not locate ipc_apply() in the IPC patch"
+    reachable = set(re.findall(r"AC_(\w+)", match.group(0)))
+
+    phrase_action_names = {action.name for action in grammar._PHRASES.values()}
+    unreachable = phrase_action_names - reachable
+    assert not unreachable, (
+        "grammar._PHRASES names Action(s) with no C-side dispatch arm in "
+        f"ipc_apply() (MT_PULSE or MT_DISCRETE): {sorted(unreachable)}"
+    )
