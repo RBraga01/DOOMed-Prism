@@ -520,8 +520,10 @@ Supersedes: R1's "offline voice" framing and the §9 licence-review conclusion.
 Amends: the "In scope (3b, per R15)" list (§2) and §18's 3b exit criteria.
 
 **What changed.** The independent licence review (openWakeWord, Porcupine,
-Vosk, PocketSphinx, whisper.cpp, Mycroft Precise, Coqui STT — recorded in
-`docs/reference/`) was completed as planned, but Raven separately confirmed
+Vosk, PocketSphinx, whisper.cpp, Mycroft Precise, Coqui STT) was completed as
+planned; its conclusion is recorded here, in this ruling — a fuller writeup
+(licence terms, model sizes, integration notes) was not committed to the
+repo as a separate document. Raven separately confirmed
 that Prism already has an ASR/TTS integration point — `OpenAiHelper` in
 `raven_framework.helpers` — and that Raven's own planned local, on-device
 models will land behind that *same* function/interface. Building against that
@@ -610,11 +612,13 @@ shape:
   one 3b ships with is decided by the hardware/performance gate below —
   measured latency and false-positive/false-negative rate — not by
   architectural preference today.
-- `VoiceWorker` — owns the mic, the backend, the grammar, and both debounce
-  paths; runs isolated so a crash disables voice only and preserves
+- `VoiceWorker` — owns the mic, the backend, and the grammar for the general
+  command path; runs isolated so a crash disables voice only and preserves
   click/blink/Enter (§8's existing crash-isolation shape). Feeds `Action`s
   into the unmodified `ActionRouter` — no change to `pipeline.py`'s consumer
-  side.
+  side. (The fire path's own debounce/cooldown lives in
+  `RavenSpokenFireSource`, not here — see the fire/command split above;
+  `VoiceWorker` does not own "both debounce paths".)
 
 **Two validation stages, not one.** 3b's decision gate splits cleanly along
 what the Simulator can and cannot prove:

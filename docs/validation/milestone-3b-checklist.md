@@ -9,9 +9,12 @@ claimed closed by the software gate passing.
 
 - [ ] `check_publication_safety.py` and `.gitignore` cover audio/model
   suffixes (task 1) — confirm both scans still exit 0.
-- [ ] The §9 licence review is recorded as committed text: **Raven Framework
-  ASR (`OpenAiHelper`) preferred; PocketSphinx the independently researched
-  fallback**, documented and ready, not implemented. A dedicated low-latency
+- [ ] The §9 licence review's **conclusion** is recorded as committed text
+  (ruling R15 in the M3 design spec): **Raven Framework ASR (`OpenAiHelper`)
+  preferred; PocketSphinx the independently researched fallback**, not
+  implemented. The underlying research (licence terms, model sizes,
+  integration notes) was not committed to the repo as a separate writeup —
+  R15's summary sentence is the only committed text. A dedicated low-latency
   "pew pew" detector remains an architectural option, selected only if
   measurement (hardware gate) shows Raven's ASR is unsuitable for fire.
 - [ ] `AsrStatus.EMPTY_OR_FAILURE` is never reported as a confirmed failure,
@@ -20,16 +23,32 @@ claimed closed by the software gate passing.
   and its tests.
 - [ ] The closed command grammar (`weapon one`–`seven`, `use`/`open`,
   `pause`/`resume`, `menu up`/`down`, `confirm`/`cancel`) dispatches the
-  correct `Action` end-to-end against `FakeAsrBackend`, and against a real
-  build with a scripted `AsrBackend` feeding known transcripts (no live
-  microphone needed for this row).
+  correct `Action` end-to-end against `FakeAsrBackend`
+  (`tests/test_voice_worker.py`, `tests/test_voice_grammar.py`), including
+  the pulse-vs-discrete routing for state-polled keys (`USE`, `WEAPON_1..7`)
+  and the real-engine verification recorded in
+  `.superpowers/sdd/2026-09-13-doomed-prism-milestone-3b-software-gate/final-review-fix-report.md`.
+  **Host integration is explicitly deferred**: nothing in this milestone
+  constructs or drives `VoiceWorker`/`RavenSpokenFireSource` from the running
+  application (`InputPipeline`'s `ActionRouter` is private with no
+  accessor), so "against a real build with a scripted `AsrBackend` feeding
+  known transcripts" as an *operator-driven, wired* row cannot be executed
+  as written and is not claimed here — that is follow-up work (see
+  `milestone-3b-result.md`'s "Known limitations / deferred").
 - [ ] "pew pew" fires exactly once per utterance and respects its cooldown
   (`tests/test_voice_fire_source.py`).
 - [ ] A backend/audio crash disables voice only — gaze, click, and Enter/P
-  pause keep working (`tests/test_voice_worker.py`).
+  pause keep working. Covers both halves of the voice surface:
+  `tests/test_voice_worker.py` (command path) and
+  `tests/test_voice_fire_source.py` (fire path, including a raising
+  `AudioSource`, not just a raising backend).
 - [ ] The Simulator/desktop microphone path (`RavenMicrophoneSource`'s Qt
-  fallback) can be exercised manually on the Windows dev box: speak a
-  command, confirm the matched `Action` reaches the engine.
+  fallback) is unit-tested against a fake `Microphone`
+  (`tests/test_voice_audio.py`). **Manually speaking a command into the real
+  Simulator microphone and confirming the matched `Action` reaches a running
+  engine is deferred**, along with the rest of host integration (see above)
+  — nothing in this milestone constructs `VoiceWorker`/`RavenSpokenFireSource`
+  from a running application, so there is no wired path to speak into yet.
 - [ ] `python -m pytest -q`: all green.
 - [ ] Both publication-safety scans exit 0.
 
