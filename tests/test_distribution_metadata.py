@@ -45,7 +45,18 @@ def test_ipc_patch_touches_only_the_allowed_engine_files() -> None:
     }
     assert touched and touched <= allowed, f"unexpected files: {touched - allowed}"
     added = sum(1 for ln in diff.splitlines() if ln.startswith("+") and not ln.startswith("+++"))
-    assert added <= 420, f"IPC patch added {added} lines (> 420 ceiling)"
+    # 420 (M3a) -> 453 (M3b task 6) -> 461 (M3b final-review fix pass, Critical 2):
+    # WEAPON_1..7 were originally wired as MT_DISCRETE keydown/keyup pairs (task
+    # 6), which the final whole-branch review found DOOM's own gamekeydown[]
+    # polling erases before G_BuildTiccmd ever reads them -- the same trap
+    # key_fire/key_use already avoid via MT_PULSE's pulse_key[]/pulse_tics[]
+    # hold. The fix moves the 7 weapon codes onto that same MT_PULSE path (a
+    # `switch (code)` replacing the old two-way ternary) and removes their 7
+    # MT_DISCRETE arms (net -14 lines there), and adds a comment above
+    # ipc_apply() documenting DOOM's two input-consumption models so the next
+    # code isn't wired the same wrong way. Net effect: 452 -> 460 actual added
+    # lines. Ceiling kept at actual + 1, same margin M3a and task 6 used.
+    assert added <= 461, f"IPC patch added {added} lines (> 461 ceiling)"
 
 
 def test_c_patch_constants_match_the_python_enums() -> None:
@@ -63,6 +74,17 @@ def test_c_patch_constants_match_the_python_enums() -> None:
     assert defs["AC_FIRE"] == Action.FIRE
     assert defs["AC_USE"] == Action.USE
     assert defs["AC_PAUSE"] == Action.PAUSE
+    assert defs["AC_WEAPON_1"] == Action.WEAPON_1
+    assert defs["AC_WEAPON_2"] == Action.WEAPON_2
+    assert defs["AC_WEAPON_3"] == Action.WEAPON_3
+    assert defs["AC_WEAPON_4"] == Action.WEAPON_4
+    assert defs["AC_WEAPON_5"] == Action.WEAPON_5
+    assert defs["AC_WEAPON_6"] == Action.WEAPON_6
+    assert defs["AC_WEAPON_7"] == Action.WEAPON_7
+    assert defs["AC_MENU_CONFIRM"] == Action.MENU_CONFIRM
+    assert defs["AC_MENU_CANCEL"] == Action.MENU_CANCEL
+    assert defs["AC_MENU_UP"] == Action.MENU_UP
+    assert defs["AC_MENU_DOWN"] == Action.MENU_DOWN
     assert defs["MT_HELLO"] == MessageType.HELLO
     assert defs["MT_ACTION"] == MessageType.ACTION
     assert defs["MT_PULSE"] == MessageType.PULSE
@@ -94,3 +116,57 @@ def test_c_patch_constants_match_the_python_enums() -> None:
     # The documented forwardmove mapping contract the C side must implement.
     assert "10000" in diff and "MOVE_MAX_FORWARDMOVE" in diff
     assert re.search(r"IPC_Input_ForwardMove", diff)  # the accessor g_game.c folds
+
+
+def test_every_grammar_action_has_a_c_dispatch_arm() -> None:
+    """The exact class of bug the final whole-branch review's Critical 1 and
+    2 findings were: a grammar phrase whose Action reaches no C-side
+    dispatch arm -- or reaches one under the wrong message type for DOOM's
+    input-consumption model -- matches successfully and then silently does
+    nothing end-to-end (Critical 1: AC_USE dispatched as MT_DISCRETE, which
+    ipc_apply() never handled for that code; Critical 2: AC_WEAPON_1..7 as an
+    instantaneous MT_DISCRETE keydown+keyup pair, erased by DOOM's own
+    gamekeydown[] polling before G_BuildTiccmd ever read it). A bare
+    "does the code appear anywhere in ipc_apply()" check does not catch
+    either bug -- AC_USE and the weapon codes were always textually present,
+    just under the wrong case. This test instead scans the MT_PULSE and
+    MT_DISCRETE case bodies separately and asserts every state-polled Action
+    (grammar._PULSE_ACTIONS -- the ones that need MT_PULSE's hold mechanism,
+    per the fix brief's Critical 1/2 root cause) is reachable specifically
+    within the MT_PULSE case, not merely somewhere in the function.
+    """
+    import re
+
+    from pewpew.voice import grammar
+
+    diff = (ROOT / "patches" / "crispy-doom-ipc-input.diff").read_text(encoding="utf-8")
+    # ipc_apply()'s body contains, in order, the MT_PULSE switch(code), the
+    # MT_DISCRETE if-chain, then MT_BYE -- every line in this whole-new-file
+    # diff is "+"-prefixed, so "case MT_DISCRETE:"/"case MT_BYE:" delimit the
+    # MT_PULSE case's own body without needing to track brace depth.
+    pulse_match = re.search(
+        r"\+\s*case MT_PULSE:\n(.*?)\n\+\s*case MT_DISCRETE:", diff, re.DOTALL
+    )
+    discrete_match = re.search(
+        r"\+\s*case MT_DISCRETE:\n(.*?)\n\+\s*case MT_BYE:", diff, re.DOTALL
+    )
+    assert pulse_match and discrete_match, "could not locate ipc_apply()'s case bodies in the IPC patch"
+    pulse_reachable = set(re.findall(r"AC_(\w+)", pulse_match.group(1)))
+    discrete_reachable = set(re.findall(r"AC_(\w+)", discrete_match.group(1)))
+    reachable = pulse_reachable | discrete_reachable
+
+    phrase_action_names = {action.name for action in grammar._PHRASES.values()}
+    unreachable = phrase_action_names - reachable
+    assert not unreachable, (
+        "grammar._PHRASES names Action(s) with no C-side dispatch arm in "
+        f"ipc_apply() (MT_PULSE or MT_DISCRETE): {sorted(unreachable)}"
+    )
+
+    pulse_action_names = {action.name for action in grammar._PULSE_ACTIONS}
+    wrongly_typed = pulse_action_names - pulse_reachable
+    assert not wrongly_typed, (
+        "grammar._PULSE_ACTIONS names Action(s) reachable only outside "
+        "MT_PULSE -- an instantaneous MT_DISCRETE keydown+keyup pair for a "
+        "state-polled key is erased by DOOM's gamekeydown[] polling before "
+        f"G_BuildTiccmd reads it (Critical 2's exact bug): {sorted(wrongly_typed)}"
+    )

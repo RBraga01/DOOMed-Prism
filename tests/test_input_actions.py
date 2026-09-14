@@ -132,3 +132,11 @@ def test_release_all_zeros_every_outstanding_axis_and_is_a_noop_when_clear() -> 
     sent.clear()
     router.release_all()
     assert sent == []
+
+
+def test_new_discrete_action_codes_match_the_spec_r15_values() -> None:
+    assert (Action.WEAPON_1, Action.WEAPON_2, Action.WEAPON_3) == (30, 31, 32)
+    assert (Action.WEAPON_4, Action.WEAPON_5, Action.WEAPON_6, Action.WEAPON_7) == (33, 34, 35, 36)
+    assert (Action.MENU_CONFIRM, Action.MENU_CANCEL, Action.MENU_UP, Action.MENU_DOWN) == (37, 38, 39, 40)
+    assert (Action.NEXT_WEAPON, Action.PREV_WEAPON) == (41, 42)
+    assert (Action.AUTOMAP, Action.SAVE_GAME, Action.LOAD_GAME, Action.EXIT_DOOM) == (43, 44, 45, 46)

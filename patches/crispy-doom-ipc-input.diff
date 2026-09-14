@@ -100,7 +100,7 @@ new file mode 100644
 index 00000000..6a774780
 --- /dev/null
 +++ b/src/i_ipc_input.c
-@@ -0,0 +1,361 @@
+@@ -0,0 +1,402 @@
 +//
 +// Copyright(C) 2026 DOOMed Prism contributors
 +// GPL-2.0-or-later — see i_ipc_input.h.
@@ -176,6 +176,17 @@ index 00000000..6a774780
 +#define AC_FIRE 10
 +#define AC_USE 11
 +#define AC_PAUSE 20
++#define AC_WEAPON_1 30
++#define AC_WEAPON_2 31
++#define AC_WEAPON_3 32
++#define AC_WEAPON_4 33
++#define AC_WEAPON_5 34
++#define AC_WEAPON_6 35
++#define AC_WEAPON_7 36
++#define AC_MENU_CONFIRM 37
++#define AC_MENU_CANCEL 38
++#define AC_MENU_UP 39
++#define AC_MENU_DOWN 40
 +
 +static int ipc_enabled = 0;
 +static ipc_sock_t ipc_sock = IPC_INVALID;
@@ -349,13 +360,35 @@ index 00000000..6a774780
 +    return ipc_enabled ? ipc_forwardmove : 0;
 +}
 +
++// DOOM has two distinct input consumption models. Edge-consumed keys
++// (key_pause via sendpause, all key_menu_* via M_Responder) act on the
++// ev_keydown edge directly and are safe as an instantaneous MT_DISCRETE
++// keydown+keyup pair. State-polled keys (key_fire, key_use, key_weapon1..8)
++// are read from gamekeydown[] inside G_BuildTiccmd -- an instantaneous pair
++// is drained by the same ProcessEvents() call that sets and clears it, so
++// BuildTiccmd never observes it true. Those keys must go through MT_PULSE's
++// pulse_key[]/pulse_tics[] hold instead. Copying AC_PAUSE's shape for a new
++// code is only correct if the target key is edge-consumed -- check which
++// model the key uses in build/crispy/src/doom/g_game.c before adding it here.
 +static void ipc_apply(uint8_t type, uint16_t code, int32_t value)
 +{
 +    int slot, i, key;
 +    switch (type)
 +    {
 +        case MT_PULSE:
-+            key = (code == AC_FIRE) ? key_fire : (code == AC_USE) ? key_use : -1;
++            switch (code)
++            {
++                case AC_FIRE: key = key_fire; break;
++                case AC_USE: key = key_use; break;
++                case AC_WEAPON_1: key = key_weapon1; break;
++                case AC_WEAPON_2: key = key_weapon2; break;
++                case AC_WEAPON_3: key = key_weapon3; break;
++                case AC_WEAPON_4: key = key_weapon4; break;
++                case AC_WEAPON_5: key = key_weapon5; break;
++                case AC_WEAPON_6: key = key_weapon6; break;
++                case AC_WEAPON_7: key = key_weapon7; break;
++                default: key = -1; break;
++            }
 +            if (key < 0) break;
 +            ipc_post_key(ev_keydown, key);
 +            // Refresh an existing same-key hold rather than allocating a new
@@ -375,6 +408,14 @@ index 00000000..6a774780
 +        case MT_DISCRETE:
 +            if (code == AC_PAUSE)
 +            { ipc_post_key(ev_keydown, key_pause); ipc_post_key(ev_keyup, key_pause); }
++            else if (code == AC_MENU_CONFIRM)
++            { ipc_post_key(ev_keydown, key_menu_forward); ipc_post_key(ev_keyup, key_menu_forward); }
++            else if (code == AC_MENU_CANCEL)
++            { ipc_post_key(ev_keydown, key_menu_back); ipc_post_key(ev_keyup, key_menu_back); }
++            else if (code == AC_MENU_UP)
++            { ipc_post_key(ev_keydown, key_menu_up); ipc_post_key(ev_keyup, key_menu_up); }
++            else if (code == AC_MENU_DOWN)
++            { ipc_post_key(ev_keydown, key_menu_down); ipc_post_key(ev_keyup, key_menu_down); }
 +            break;
 +        case MT_BYE:
 +            ipc_disable();

@@ -26,6 +26,26 @@ class Action(enum.IntEnum):
     FIRE = 10
     USE = 11
     PAUSE = 20
+    WEAPON_1 = 30
+    WEAPON_2 = 31
+    WEAPON_3 = 32
+    WEAPON_4 = 33
+    WEAPON_5 = 34
+    WEAPON_6 = 35
+    WEAPON_7 = 36
+    MENU_CONFIRM = 37
+    MENU_CANCEL = 38
+    MENU_UP = 39
+    MENU_DOWN = 40
+    # Reserved (R15 task 5): not yet wired into the C patch -- see the note
+    # above. Defined now so pewpew.voice is written once against the final
+    # action set.
+    NEXT_WEAPON = 41
+    PREV_WEAPON = 42
+    AUTOMAP = 43
+    SAVE_GAME = 44
+    LOAD_GAME = 45
+    EXIT_DOOM = 46
 
 
 _MOVE = frozenset({Action.MOVE_FORWARD, Action.MOVE_BACKWARD})
