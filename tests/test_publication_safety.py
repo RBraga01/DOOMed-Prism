@@ -389,3 +389,23 @@ def test_history_mode_checks_a_removed_gitlink_path_without_reading_its_commit(
     assert current.returncode == 0
     assert history.returncode == 1
     assert "raven_framework" in history.stdout
+
+
+def test_audio_and_model_suffixes_are_forbidden_tracked_files() -> None:
+    from scripts.check_publication_safety import path_violation
+    from pathlib import PurePosixPath
+
+    for name in (
+        "sample.wav", "sample.flac", "sample.ogg", "sample.mp3", "sample.opus",
+        "raw.raw", "raw.pcm", "model.tflite", "model.onnx", "model.pt",
+        "model.pb", "model.pbmm", "model.scorer", "model.gguf",
+    ):
+        assert path_violation(PurePosixPath(f"pewpew/voice/{name}")) is not None
+
+
+def test_openai_key_literal_is_a_credential_violation() -> None:
+    from scripts.check_publication_safety import credential_violations
+
+    assert credential_violations('openai_' + 'key = "sk-not-a-real-key-but-nonempty"')
+    assert credential_violations("open_ai_" + "key: 'also-nonempty'")
+    assert not credential_violations('openai_' + 'key = ""')

@@ -10,10 +10,18 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
 
-FORBIDDEN_SUFFIXES = (".wad", ".pk3", ".exe", ".dll", ".so")
+FORBIDDEN_SUFFIXES = (
+    ".wad", ".pk3", ".exe", ".dll", ".so",
+    # Audio and acoustic-model files: Milestone 3b's speech engine and any
+    # model it depends on are fetched or supplied locally, like the IWAD --
+    # never committed. See spec R15 / the M3 design §9 licence review.
+    ".wav", ".flac", ".ogg", ".mp3", ".opus", ".raw", ".pcm",
+    ".tflite", ".onnx", ".pt", ".pb", ".pbmm", ".scorer", ".gguf",
+)
 FORBIDDEN_NAMES = {".env", "app_key"}
 CREDENTIAL_LITERAL = re.compile(
-    r"(?:\b(?P<bare_name>app_key|app_id)\b|[\"'](?P<quoted_name>app_key|app_id)[\"'])"
+    r"(?:\b(?P<bare_name>app_key|app_id|openai_key|open_ai_key)\b|"
+    r"[\"'](?P<quoted_name>app_key|app_id|openai_key|open_ai_key)[\"'])"
     r"\s*(?:=|:)\s*(?:\(\s*)*"
     r"(?:[rRuUbBfF]{0,3})?"
     r'(?:"""(?P<triple_double>.+?)"""|'
