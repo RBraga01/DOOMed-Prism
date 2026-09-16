@@ -76,6 +76,9 @@ class DoomProcess:
         # window/renderer/texture pipeline with nothing shown on screen. Opt-in
         # and off by default so Windows/Simulator/Linux development and CI keep
         # their native window unchanged; Prism deployment sets this explicitly.
+        # Presence check, not a parsed boolean -- matches every other
+        # DOOMED_PRISM_* flag in this codebase: any non-empty value enables
+        # it, including "0". Unset the variable to disable it.
         if os.environ.get("DOOMED_PRISM_HEADLESS_ENGINE"):
             child_env["SDL_VIDEODRIVER"] = "dummy"
         if ipc_address:

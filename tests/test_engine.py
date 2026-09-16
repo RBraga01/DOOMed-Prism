@@ -334,6 +334,11 @@ def test_headless_engine_env_unset_leaves_the_child_environment_unchanged(
     """Catches the headless opt-in accidentally becoming the default and
     breaking the native window Windows/Simulator development relies on."""
     monkeypatch.delenv("DOOMED_PRISM_HEADLESS_ENGINE", raising=False)
+    # Isolates this assertion from whatever the ambient test-runner
+    # environment happens to export -- a real DOOMED_PRISM_HEADLESS_ENGINE=1
+    # correctly sets SDL_VIDEODRIVER, but that must never come from a stray
+    # inherited value this test didn't ask for.
+    monkeypatch.delenv("SDL_VIDEODRIVER", raising=False)
     factory = FakePopenFactory()
     engine = DoomProcess(_runtime_config(tmp_path), popen_factory=factory)
 

@@ -102,7 +102,11 @@ development keeps its native window unchanged; **Prism deployment must set
 this explicitly** — nothing currently does so automatically. CI proves the
 engine runs with no display server at all (`scripts/ci_headless_smoke.py`,
 no `DISPLAY`, no Xvfb); confirming the Raven app is the *only* visible
-surface on physical hardware remains a separate validation step.
+surface on physical hardware remains a separate validation step. Like every
+other `DOOMED_PRISM_*` flag in this codebase (`DOOMED_PRISM_WARP`,
+`DOOMED_PRISM_DEBUG_FIRE`), this is a presence check, not a parsed boolean —
+**any non-empty value enables it, including `"0"`.** To disable, unset the
+variable; do not set it to `"0"` or `"false"` expecting that to work.
 
 ## Why shared memory?
 
