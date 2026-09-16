@@ -312,6 +312,41 @@ def test_start_passes_a_unique_frame_segment_name_through_the_child_environment(
     assert other.frame_segment_name != name
 
 
+def test_headless_engine_env_sets_sdl_dummy_video_driver_for_the_child(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Catches a Prism deployment still presenting a native Crispy window
+    alongside the Raven compositor (Parth's hardware finding): opting in via
+    DOOMED_PRISM_HEADLESS_ENGINE must make SDL use its no-window dummy driver
+    for the child, without touching the framebuffer-export or IPC patches."""
+    monkeypatch.setenv("DOOMED_PRISM_HEADLESS_ENGINE", "1")
+    factory = FakePopenFactory()
+    engine = DoomProcess(_runtime_config(tmp_path), popen_factory=factory)
+
+    engine.start()
+
+    assert factory.processes[0].env["SDL_VIDEODRIVER"] == "dummy"
+
+
+def test_headless_engine_env_unset_leaves_the_child_environment_unchanged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Catches the headless opt-in accidentally becoming the default and
+    breaking the native window Windows/Simulator development relies on."""
+    monkeypatch.delenv("DOOMED_PRISM_HEADLESS_ENGINE", raising=False)
+    # Isolates this assertion from whatever the ambient test-runner
+    # environment happens to export -- a real DOOMED_PRISM_HEADLESS_ENGINE=1
+    # correctly sets SDL_VIDEODRIVER, but that must never come from a stray
+    # inherited value this test didn't ask for.
+    monkeypatch.delenv("SDL_VIDEODRIVER", raising=False)
+    factory = FakePopenFactory()
+    engine = DoomProcess(_runtime_config(tmp_path), popen_factory=factory)
+
+    engine.start()
+
+    assert "SDL_VIDEODRIVER" not in factory.processes[0].env
+
+
 def test_stop_clears_the_segment_name_after_the_child_exits(tmp_path: Path) -> None:
     """Catches a stale segment name lingering after shutdown."""
     factory = FakePopenFactory()
