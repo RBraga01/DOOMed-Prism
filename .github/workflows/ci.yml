@@ -128,6 +128,21 @@ jobs:
             echo ":white_check_mark: The patched engine connected over a local socket, completed the version handshake, stayed live with an advancing \`frame_counter\` under a 500-frame action flood **including an analog forward/back \`forwardmove\` ramp**, and tore down cleanly with no orphan and no leftover socket."
           } >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Headless engine smoke test (DOOMED_PRISM_HEADLESS_ENGINE, no Xvfb)
+        timeout-minutes: 10
+        run: |
+          set -o pipefail
+          python scripts/ci_headless_smoke.py \
+            "${{ steps.build.outputs.exe }}" \
+            /usr/share/games/doom/freedoom1.wad | tee headless-smoke.log
+          {
+            echo "### Headless engine validation (Prism finding)"
+            echo ""
+            echo ":white_check_mark: With \`DOOMED_PRISM_HEADLESS_ENGINE=1\` and no \`DISPLAY\`/Xvfb at all, the patched engine still completed the IPC handshake, opened the shared-memory framebuffer, kept \`frame_counter\` advancing under IPC input, and tore down cleanly."
+            echo ""
+            echo "This proves the engine no longer depends on a real display server -- it is not proof of what the Raven compositor shows on physical Prism hardware. That remains a separate physical-Prism validation gate."
+          } >> "$GITHUB_STEP_SUMMARY"
+
   arm64-build-and-posix-smoke:
     name: ARM64 build + POSIX shared-memory runtime smoke
     runs-on: ubuntu-24.04-arm
@@ -185,3 +200,18 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
           echo "::notice title=ARM64 POSIX runtime validation::shm_open path exercised natively on Linux $ARCH (segment + advancing frame_counter + clean teardown)"
+
+      - name: Headless engine smoke test (ARM64, DOOMED_PRISM_HEADLESS_ENGINE, no Xvfb)
+        timeout-minutes: 10
+        run: |
+          set -o pipefail
+          python scripts/ci_headless_smoke.py \
+            "${{ steps.build.outputs.exe }}" \
+            /usr/share/games/doom/freedoom1.wad | tee headless-smoke.log
+          {
+            echo "### ARM64 headless engine validation (Prism finding)"
+            echo ""
+            echo ":white_check_mark: With \`DOOMED_PRISM_HEADLESS_ENGINE=1\` and no \`DISPLAY\`/Xvfb at all, the patched engine still completed the IPC handshake, opened the shared-memory framebuffer, kept \`frame_counter\` advancing under IPC input, and tore down cleanly on native ARM64."
+            echo ""
+            echo "This proves the engine no longer depends on a real display server -- it is not proof of what the Raven compositor shows on physical Prism hardware (ARM64 is the closer architectural proxy for that, but the visual claim itself remains a separate physical-Prism validation gate)."
+          } >> "$GITHUB_STEP_SUMMARY"

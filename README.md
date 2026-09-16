@@ -90,6 +90,20 @@ Raven Simulator compositor  (QWidget.grab())
 - Because the viewport is an ordinary Qt‑painted widget, Raven captures the
   result through its own `QWidget.grab()` compositor, in every mode.
 
+**On Linux/Prism, Crispy's own native SDL window must not be shown.**
+Raven Prism hardware testing found both Crispy's native window and the Raven
+compositor's framebuffer output visible on-device at once — not the intended
+architecture; Crispy should run purely as the engine/framebuffer producer
+there. Setting `DOOMED_PRISM_HEADLESS_ENGINE=1` makes `DoomProcess` launch
+Crispy with SDL's built-in `dummy` video driver: the engine still renders,
+exports frames, and accepts IPC input exactly as before, but never creates a
+real, visible window. It's opt-in and unset by default, so Windows/Simulator
+development keeps its native window unchanged; **Prism deployment must set
+this explicitly** — nothing currently does so automatically. CI proves the
+engine runs with no display server at all (`scripts/ci_headless_smoke.py`,
+no `DISPLAY`, no Xvfb); confirming the Raven app is the *only* visible
+surface on physical hardware remains a separate validation step.
+
 ## Why shared memory?
 
 Milestone 1 tried the obvious thing: launch Crispy Doom as a normal process and
@@ -215,10 +229,16 @@ GitHub Actions (`.github/workflows/ci.yml`) runs, on `ubuntu-latest`:
   distro‑provided Freedoom IWAD, attach with `FrameReader`, and assert a valid
   640×480 segment, an advancing `frame_counter`, and a clean teardown with no
   leftover `/dev/shm` segment.
+- a **headless engine smoke test** (`scripts/ci_headless_smoke.py`): launch
+  with `DOOMED_PRISM_HEADLESS_ENGINE=1` and **no `DISPLAY`, no Xvfb at all**,
+  and assert the IPC handshake, framebuffer export, and input round-trip all
+  still work, with a clean teardown. This proves the engine no longer depends
+  on a real display server — it is not proof of what's visible on physical
+  Prism hardware; that stays a separate validation gate.
 
-The build and the POSIX runtime smoke test also run natively on
-`ubuntu-24.04-arm` (aarch64), so every push exercises the patched engine on
-ARM64 Linux as well as x86_64.
+The build and both runtime smoke tests also run natively on `ubuntu-24.04-arm`
+(aarch64), so every push exercises the patched engine on ARM64 Linux as well
+as x86_64.
 
 What this does and does not prove:
 
@@ -232,6 +252,11 @@ What this does and does not prove:
   [`docs/reference/raven-public-post.md`](docs/reference/raven-public-post.md)).
   What CI does *not* cover is on-glasses behaviour: the Raven compositor and the
   Prism's own runtime, not ARM64 as such.
+- **`DOOMED_PRISM_HEADLESS_ENGINE`'s no-Xvfb CI proof is not a claim about
+  physical hardware.** It proves the engine doesn't need a real display
+  server; it says nothing about what the Raven compositor actually shows on
+  Prism. Confirming only the Raven app is visible there — no separate Crispy
+  surface — is a physical-Prism validation gate, still open.
 
 ## Publication safety
 

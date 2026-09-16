@@ -67,6 +67,17 @@ class DoomProcess:
             raise EngineAlreadyRunning("Crispy Doom is already running")
         name = f"doomed-prism-fb-{os.getpid()}-{secrets.token_hex(4)}"
         child_env = {**os.environ, "DOOMED_PRISM_FB_NAME": name}
+        # Hardware finding (Parth, Raven Prism testing): without this, Crispy's
+        # own SDL window is visible alongside the Raven compositor's output on
+        # real hardware -- a duplicate presentation surface, not the intended
+        # architecture. FB_Export_Publish() reads a CPU-side render buffer and
+        # IPC input arrives via D_PostEvent(), so neither depends on an actual
+        # visible window -- SDL's built-in "dummy" driver runs the full
+        # window/renderer/texture pipeline with nothing shown on screen. Opt-in
+        # and off by default so Windows/Simulator/Linux development and CI keep
+        # their native window unchanged; Prism deployment sets this explicitly.
+        if os.environ.get("DOOMED_PRISM_HEADLESS_ENGINE"):
+            child_env["SDL_VIDEODRIVER"] = "dummy"
         if ipc_address:
             child_env["DOOMED_PRISM_IPC_ADDR"] = ipc_address
             self._ipc_address = ipc_address
