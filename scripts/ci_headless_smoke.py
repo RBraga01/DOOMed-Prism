@@ -100,7 +100,7 @@ def main() -> int:
     # before escalating to terminate() -- SIGINT matches how the engine is
     # already shut down elsewhere on POSIX (ci_ipc_smoke.py, ci_posix_smoke.py).
     engine = DoomProcess(config, graceful_close=_sigint_close)
-    engine.start(ipc_address=SOCKET_PATH)
+    pid = engine.start(ipc_address=SOCKET_PATH)
     fb_name = engine.frame_segment_name
     try:
         deadline = time.monotonic() + CONNECT_TIMEOUT_S
@@ -149,7 +149,20 @@ def main() -> int:
               f"(IPC input round-trip confirmed live)")
     finally:
         server.close()
-        engine.stop(timeout_s=STOP_TIMEOUT_S)
+        try:
+            engine.stop(timeout_s=STOP_TIMEOUT_S)
+        except subprocess.TimeoutExpired:
+            # DoomProcess.stop() has no SIGKILL fallback of its own (unlike
+            # this script's siblings, ci_ipc_smoke.py/ci_posix_smoke.py) --
+            # re-raising would skip the orphan-process check below entirely,
+            # hiding exactly the "no orphan" guarantee this test exists to
+            # prove. Force it directly rather than widen DoomProcess.stop()'s
+            # shared behavior for one caller.
+            print(f"engine did not exit after SIGINT+SIGTERM -- sending SIGKILL to {pid}")
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except OSError:
+                pass
 
     leftover = subprocess.run(["pgrep", "-x", "crispy-doom"], capture_output=True, text=True)
     if leftover.returncode == 0:
